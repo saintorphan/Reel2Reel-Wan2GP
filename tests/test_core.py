@@ -224,6 +224,38 @@ def test_projects():
     print("✓ projects CRUD + versioning + project/global bins (+legacy migrate)")
 
 
+def test_model_extensions():
+    tl = timeline.Timeline(fps=24, width=320, height=240)
+    v = tl.first_track("Video")
+    c = timeline.Clip(id="c1", src="/a.mp4", start=0, in_=0, out=4, track=v.id, speed=2.0)
+    tl.add_clip(c)
+    assert abs(c.dur - 2.0) < 1e-6, c.dur                       # 4s @2x = 2s timeline
+    ids = tl.split_at(v.id, 1.0)                                # split at 1s = 2s source
+    _, right = tl.find_clip(ids[0])
+    assert abs(right.in_ - 2.0) < 1e-6, right.in_
+    txt = tl.add_text_clip("Hello", start=5, dur=3)
+    assert txt.type == "text" and abs(txt.dur - 3.0) < 1e-6 and txt.text["content"] == "Hello"
+    tl.set_clip("c1", out=0.0)                                  # zero-length -> clamped
+    _, c1 = tl.find_clip("c1")
+    assert c1.out > c1.in_
+    mid = tl.add_marker(2.5, "scene 2")
+    assert any(m.id == mid and m.label == "scene 2" for m in tl.markers)
+    assert tl.remove_marker(mid)
+    data = tl.serialize_clips([txt.id])
+    new = tl.paste_clips(data, at=10.0)
+    _, pasted = tl.find_clip(new[0])
+    assert len(new) == 1 and abs(pasted.start - 10.0) < 1e-6 and pasted.type == "text"
+    tl.transitions.append(timeline.Transition(id="xbad", track=v.id,
+                                              between=("nope", "nope2"), duration=0.5))
+    tl.sanitize()
+    assert not any(x.id == "xbad" for x in tl.transitions)      # bad transition dropped
+    # round-trip with new fields
+    tl2 = timeline.from_document(timeline.to_document(tl))
+    _, p2 = tl2.find_clip(new[0])
+    assert p2.type == "text" and p2.text["content"] == "Hello"
+    print("✓ model extensions (speed/split, text, clamp, markers, copy-paste, sanitize, round-trip)")
+
+
 def test_render_smoke():
     if not render.ffmpeg_path():
         print("· render smoke skipped (ffmpeg not found)")
@@ -260,6 +292,7 @@ if __name__ == "__main__":
     test_detach_audio()
     test_clip_track_ops()
     test_transitions()
+    test_model_extensions()
     test_projects()
     test_render_transition()
     test_render_smoke()

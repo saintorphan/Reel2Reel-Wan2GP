@@ -27,6 +27,7 @@
     pxPerSec: 80, snap: true, lastSeqIn: -1, mounted: false, playing: false,
     root: null, lanes: null, ruler: null, playhead: null, video: null, readout: null,
     pushTimer: null, rafId: null, lastT: 0,
+    interacting: false, pendingLoad: null,
   };
 
   // ---- bridge ---------------------------------------------------------------
@@ -51,6 +52,11 @@
     var msg; try { msg = typeof payload === "string" ? JSON.parse(payload) : payload; }
     catch (e) { console.error("[R2R] bad inbound", e); return; }
     if (typeof msg.seq === "number" && msg.seq <= S.lastSeqIn) return;
+    // Don't clobber an in-flight drag/scrub; queue and apply on pointerup.
+    if (S.interacting && msg.op === "load") { S.pendingLoad = msg; return; }
+    _apply(msg);
+  }
+  function _apply(msg) {
     if (typeof msg.seq === "number") S.lastSeqIn = msg.seq;
     if (msg.op === "load" && msg.edit) {
       S.edit = msg.edit;
@@ -59,6 +65,10 @@
       if (typeof ui.snap === "boolean") S.snap = ui.snap;
       renderAll(); syncSnapBox();
     }
+  }
+  function endInteract() {
+    S.interacting = false;
+    if (S.pendingLoad) { var m = S.pendingLoad; S.pendingLoad = null; _apply(m); }
   }
 
   // ---- geometry -------------------------------------------------------------
@@ -173,7 +183,14 @@
     if (S.video.getAttribute("data-src") !== hit.url) {
       S.video.setAttribute("data-src", hit.url); S.video.src = hit.url;
     }
-    try { S.video.currentTime = (hit.in || 0) + (ph - hit.start); } catch (e) {}
+    var ct = (hit.in || 0) + ((ph - hit.start) * (hit.speed || 1));
+    if (S.video.readyState >= 1) { try { S.video.currentTime = ct; } catch (e) {} }
+    else {
+      S.video.addEventListener("loadedmetadata", function onm() {
+        try { S.video.currentTime = ct; } catch (e) {}
+        S.video.removeEventListener("loadedmetadata", onm);
+      }, { once: true });
+    }
   }
 
   // ---- transport ------------------------------------------------------------
@@ -202,6 +219,7 @@
     function down(e, m) {
       e.preventDefault(); e.stopPropagation();
       mode = m; x0 = e.clientX; start0 = c.start; in0 = c.in; out0 = c.out; moved = false;
+      S.interacting = true;
       select(c.id);
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up, { once: true });
@@ -221,7 +239,7 @@
         el.style.width = Math.max(8, sec2px(c.dur)) + "px";
       }
     }
-    function up() { window.removeEventListener("pointermove", move); mode = null; renderAll(); commit(); }
+    function up() { window.removeEventListener("pointermove", move); mode = null; renderAll(); commit(); endInteract(); }
     el.addEventListener("pointerdown", function (e) { down(e, "move"); });
     hl.addEventListener("pointerdown", function (e) { down(e, "l"); });
     hr.addEventListener("pointerdown", function (e) { down(e, "r"); });
@@ -238,9 +256,11 @@
       setPlayhead(Math.max(0, px2sec(e.clientX - rect.left))); commit();
     }
     S.ruler.addEventListener("pointerdown", function (e) {
-      stop(); scrub(e);
+      stop(); S.interacting = true; scrub(e);
       window.addEventListener("pointermove", scrub);
-      window.addEventListener("pointerup", function () { window.removeEventListener("pointermove", scrub); }, { once: true });
+      window.addEventListener("pointerup", function () {
+        window.removeEventListener("pointermove", scrub); endInteract();
+      }, { once: true });
     });
   }
 

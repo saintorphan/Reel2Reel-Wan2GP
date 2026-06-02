@@ -1,22 +1,15 @@
 """ffmpeg export for a Reel2Reel timeline. No Gradio.
 
-Two-stage, multi-pass orchestration (subprocess with arg LISTS — never a shell
-string):
+Two-stage: PASS 1 normalizes every clip to a canonical profile (trim + speed/
+reverse + color + scale, cached); PASS 2 builds ONE filter graph — per video
+track a concat/xfade fold (transitions, fades, gaps) overlaid onto a black
+canvas, then PiP (geometry) clips and text/title clips overlaid on top; audio is
+gain/fade/overlap-cross-faded, delayed to position, mixed and loudness-normalized.
 
-  PASS 1 — NORMALIZE: one ffmpeg call per distinct trimmed clip instance,
-  re-encoded to a canonical profile (WxH / fps / SAR / pix_fmt / sample-rate).
-  Cached by (src, in, out, canvas). Uniform inputs are what make concat / xfade
-  reliable.
-
-  PASS 2 — COMPOSITE: build ONE filter_complex.
-    Video — per audible track, fold the clips left-to-right into a single
-    yuva420p stream: transparent leading/inter-clip gaps (so lower tracks show
-    through), per-clip fades (alpha) and opacity, and xfade where a transition
-    joins two clips. Each track stream is overlaid bottom-to-top onto a black
-    canvas, then flattened to yuv420p.
-    Audio — every audible source (audio-track clips AND un-muted video-clip
-    audio) is fade/gain/volume-shaped, front-padded to its start with adelay,
-    then amix(normalize=0) + loudnorm.
+Export supports presets (mp4/webm/prores/gif), a quality target, a resolution
+override and an in/out range. The filter graph is passed via -filter_complex_script
+so very large timelines don't hit the command-line length limit. Keyframe
+automation is carried in the model but not yet applied here (static values used).
 """
 from __future__ import annotations
 
@@ -27,11 +20,28 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from . import paths
+from . import effects, paths
 
 logger = logging.getLogger("reel2reel.render")
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+_FONT_CANDIDATES = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+]
+
+# preset -> ffmpeg output options. crf filled from QUALITY.
+PRESETS = {
+    "mp4":    {"ext": ".mp4",  "v": ["-c:v", "libx264", "-preset", "medium"],
+               "a": ["-c:a", "aac", "-b:a", "192k"], "pix": "yuv420p",
+               "extra": ["-movflags", "+faststart"]},
+    "webm":   {"ext": ".webm", "v": ["-c:v", "libvpx-vp9", "-b:v", "0"],
+               "a": ["-c:a", "libopus", "-b:a", "160k"], "pix": "yuv420p", "extra": []},
+    "prores": {"ext": ".mov",  "v": ["-c:v", "prores_ks", "-profile:v", "3"],
+               "a": ["-c:a", "pcm_s16le"], "pix": "yuv422p10le", "extra": []},
+    "gif":    {"ext": ".gif",  "v": [], "a": [], "pix": "rgb24", "extra": []},
+}
+QUALITY = {"high": 16, "medium": 21, "low": 27}
 
 
 class RenderError(RuntimeError):
@@ -39,7 +49,7 @@ class RenderError(RuntimeError):
 
 
 # --------------------------------------------------------------------------- #
-#  binaries                                                                   #
+#  binaries                                                                    #
 # --------------------------------------------------------------------------- #
 
 def ffmpeg_path() -> str | None:
@@ -68,12 +78,15 @@ def ffmpeg_version() -> str:
         return ""
 
 
-def run(args: list[str], timeout: int = 1800) -> str:
+def _font() -> str | None:
+    return next((f for f in _FONT_CANDIDATES if Path(f).exists()), None)
+
+
+def run(args: list[str], timeout: int = 3600) -> str:
     proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     if proc.returncode != 0:
         tail = "\n".join((proc.stderr or "").strip().splitlines()[-24:])
-        logger.error("ffmpeg failed (%d): %s\ncmd: %s", proc.returncode, tail,
-                     " ".join(args))
+        logger.error("ffmpeg failed (%d): %s", proc.returncode, tail)
         raise RenderError(f"ffmpeg exited {proc.returncode}:\n{tail}")
     return proc.stdout or ""
 
@@ -91,64 +104,86 @@ def ffprobe_dur(path: str) -> float | None:
 
 
 # --------------------------------------------------------------------------- #
-#  canvas + caching                                                           #
+#  canvas + caching                                                            #
 # --------------------------------------------------------------------------- #
 
-def canvas_of(tl) -> dict:
-    return {"w": int(tl.width), "h": int(tl.height), "fps": int(tl.fps),
-            "ar": int(tl.sample_rate), "pix": "yuv420p"}
+def canvas_of(tl, width=None, height=None, fps=None) -> dict:
+    return {"w": int(width or tl.width), "h": int(height or tl.height),
+            "fps": int(fps or tl.fps), "ar": int(tl.sample_rate), "pix": "yuv420p"}
 
 
 def _is_image(src: str) -> bool:
     return Path(src).suffix.lower() in _IMAGE_EXTS
 
 
-def _key(src, in_, out, canvas, stream) -> str:
-    raw = f"{src}|{in_:.3f}|{out:.3f}|{canvas['w']}x{canvas['h']}@{canvas['fps']}|{canvas['ar']}|{stream}"
-    return hashlib.sha1(raw.encode()).hexdigest()[:16]
+def _clip_key(clip, canvas, stream, pad) -> str:
+    raw = (f"{clip.src}|{clip.in_:.3f}|{clip.out:.3f}|{canvas['w']}x{canvas['h']}"
+           f"@{canvas['fps']}|{canvas['ar']}|{stream}|sp{clip.speed_f:.3f}|rv{int(clip.reverse)}"
+           f"|pad{int(pad)}|col{hashlib.sha1(str(clip.color).encode()).hexdigest()[:6]}")
+    return hashlib.sha1(raw.encode()).hexdigest()[:18]
 
 
 # --------------------------------------------------------------------------- #
-#  PASS 1 — normalize                                                         #
+#  PASS 1 — normalize                                                          #
 # --------------------------------------------------------------------------- #
 
-def normalize_video(clip, canvas, ffmpeg) -> str:
-    out_path = paths.norm_dir() / f"{_key(clip.src, clip.in_, clip.out, canvas, 'v')}.mp4"
+def normalize_video(clip, canvas, ffmpeg, pad=True) -> str:
+    out_path = paths.norm_dir() / f"{_clip_key(clip, canvas, 'v', pad)}.mp4"
     if out_path.exists():
         return str(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    dur = max(1.0 / canvas["fps"], clip.dur)
-    vf = (f"scale={canvas['w']}:{canvas['h']}:force_original_aspect_ratio=decrease,"
-          f"pad={canvas['w']}:{canvas['h']}:-1:-1:color=black,setsar=1,"
-          f"fps={canvas['fps']},format={canvas['pix']}")
+    src_len = max(1.0 / canvas["fps"], clip.src_len)
+    vf = []
+    sp = effects.speed_vf(clip.speed_f, clip.reverse)
+    if sp:
+        vf.append(sp)
+    if pad:
+        vf.append(f"scale={canvas['w']}:{canvas['h']}:force_original_aspect_ratio=decrease")
+        vf.append(f"pad={canvas['w']}:{canvas['h']}:-1:-1:color=black")
+    else:
+        vf.append(f"scale={canvas['w']}:{canvas['h']}:force_original_aspect_ratio=decrease")
+    col = effects.color_vf(clip.color)
+    if col:
+        vf.append(col)
+    vf += [f"fps={canvas['fps']}", "setsar=1", f"format={canvas['pix']}"]
     args = [ffmpeg, "-y"]
     if _is_image(clip.src):
-        args += ["-loop", "1", "-t", f"{dur:.3f}", "-i", clip.src]
+        args += ["-loop", "1", "-t", f"{clip.dur:.3f}", "-i", clip.src]
     else:
-        args += ["-ss", f"{clip.in_:.3f}", "-t", f"{dur:.3f}", "-i", clip.src]
-    args += ["-an", "-vf", vf, "-c:v", "libx264", "-preset", "veryfast",
+        args += ["-ss", f"{clip.in_:.3f}", "-t", f"{src_len:.3f}", "-i", clip.src]
+    args += ["-an", "-vf", ",".join(vf), "-c:v", "libx264", "-preset", "veryfast",
              "-crf", "18", "-pix_fmt", canvas["pix"], str(out_path)]
     run(args)
     return str(out_path)
 
 
 def normalize_audio(clip, canvas, ffmpeg) -> str:
-    out_path = paths.norm_dir() / f"{_key(clip.src, clip.in_, clip.out, canvas, 'a')}.m4a"
+    out_path = paths.norm_dir() / f"{_clip_key(clip, canvas, 'a', False)}.m4a"
     if out_path.exists():
         return str(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    dur = max(0.01, clip.dur)
-    af = f"aresample={canvas['ar']},aformat=sample_fmts=fltp:channel_layouts=stereo"
-    args = [ffmpeg, "-y", "-ss", f"{clip.in_:.3f}", "-t", f"{dur:.3f}", "-i", clip.src,
-            "-vn", "-af", af, "-c:a", "aac", "-ar", str(canvas["ar"]), "-ac", "2",
-            str(out_path)]
+    af = []
+    sp = effects.speed_af(clip.speed_f, clip.reverse)
+    if sp:
+        af.append(sp)
+    af += [f"aresample={canvas['ar']}", "aformat=sample_fmts=fltp:channel_layouts=stereo"]
+    args = [ffmpeg, "-y", "-ss", f"{clip.in_:.3f}", "-t", f"{max(0.01, clip.src_len):.3f}",
+            "-i", clip.src, "-vn", "-af", ",".join(af), "-c:a", "aac",
+            "-ar", str(canvas["ar"]), "-ac", "2", str(out_path)]
     run(args)
     return str(out_path)
 
 
 # --------------------------------------------------------------------------- #
-#  PASS 2 — composite                                                         #
+#  PASS 2 — composite                                                          #
 # --------------------------------------------------------------------------- #
+
+def _is_pip(c) -> bool:
+    g = c.geometry
+    return isinstance(g, dict) and (effects.geometry_scale(g) != 1.0
+                                    or g.get("x", "center") != "center"
+                                    or g.get("y", "center") != "center")
+
 
 def has_transitions(tl) -> bool:
     return bool(getattr(tl, "transitions", None))
@@ -158,90 +193,102 @@ def _gain(db: float) -> float:
     return 10 ** (float(db) / 20.0)
 
 
-def export(tl, out_path=None, progress_cb=None) -> str:
+def export(tl, out_path=None, preset="mp4", quality="high", width=None, height=None,
+           fps=None, start=None, end=None, progress_cb=None) -> str:
     ffmpeg = ffmpeg_path()
     if not ffmpeg:
         raise RenderError("ffmpeg not found. Install ffmpeg or set REEL2REEL_FFMPEG.")
-    canvas = canvas_of(tl)
+    tl.sanitize()
+    canvas = canvas_of(tl, width, height, fps)
     total = tl.total_duration()
     if total <= 0:
         raise RenderError("Timeline is empty — add a clip before exporting.")
+    preset = preset if preset in PRESETS else "mp4"
+    p = PRESETS[preset]
+    W, H, FPS, AR, PIX = canvas["w"], canvas["h"], canvas["fps"], canvas["ar"], p["pix"]
+    font = _font()
 
-    vtracks = tl.audible_tracks("Video")
-    atracks = tl.audible_tracks("Audio")
-    W, H, FPS, AR, PIX = canvas["w"], canvas["h"], canvas["fps"], canvas["ar"], canvas["pix"]
-
-    # transition lookup: left_clip_id -> Transition
     trans_by_left = {x.between[0]: x for x in getattr(tl, "transitions", [])}
 
-    # collect work
-    vclips = [(t, c) for t in vtracks for c in sorted(t.clips, key=lambda c: c.start) if c.src]
-    audio_src = []
-    for t in atracks:
-        for c in sorted(t.clips, key=lambda c: c.start):
-            if c.src and not c.mute:
-                audio_src.append((c, t))
-    for t in vtracks:
-        for c in sorted(t.clips, key=lambda c: c.start):
-            if c.src and c.has_audio and not c.mute:
-                audio_src.append((c, t))
-
-    def _progress(frac, desc):
+    def _prog(frac, desc):
         if callable(progress_cb):
             try:
                 progress_cb(frac, desc)
             except Exception:
                 pass
 
-    # -- PASS 1: normalize --------------------------------------------------
-    norm_v, norm_a = {}, {}
-    work = len(vclips) + len(audio_src)
-    done = 0
-    for _, c in vclips:
-        norm_v[c.id] = normalize_video(c, canvas, ffmpeg)
-        done += 1
-        _progress(0.05 + 0.5 * (done / max(1, work)), f"Normalizing {done}/{work}")
-    for c, _ in audio_src:
-        norm_a[c.id] = normalize_audio(c, canvas, ffmpeg)
-        done += 1
-        _progress(0.05 + 0.5 * (done / max(1, work)), f"Normalizing {done}/{work}")
+    # classify clips
+    fold = []     # (track, clip) canvas-sized media on a track (concat/xfade)
+    pip = []      # (track, clip) positioned/scaled video overlays
+    text = []     # (track, clip) drawtext titles
+    for t in tl.video_tracks():
+        for c in sorted(t.clips, key=lambda c: c.start):
+            if c.type == "text":
+                text.append((t, c))
+            elif not c.src:
+                continue
+            elif _is_pip(c):
+                pip.append((t, c))
+            else:
+                fold.append((t, c))
+    audio_src = []
+    for t in tl.audible_tracks("Audio"):
+        for c in sorted(t.clips, key=lambda c: c.start):
+            if c.src and not c.mute:
+                audio_src.append((c, t))
+    for t in tl.audible_tracks("Video"):
+        for c in sorted(t.clips, key=lambda c: c.start):
+            if c.src and c.type == "media" and c.has_audio and not c.mute:
+                audio_src.append((c, t))
 
-    # -- PASS 2: build the graph -------------------------------------------
-    _progress(0.6, "Compositing")
+    # -- PASS 1 normalize ---------------------------------------------------
+    norm_v, norm_a = {}, {}
+    work = len(fold) + len(pip) + len(audio_src)
+    done = 0
+    for t, c in fold:
+        norm_v[c.id] = normalize_video(c, canvas, ffmpeg, pad=True)
+        done += 1; _prog(0.05 + 0.5 * done / max(1, work), f"Normalizing {done}/{work}")
+    for t, c in pip:
+        norm_v[c.id] = normalize_video(c, canvas, ffmpeg, pad=False)
+        done += 1; _prog(0.05 + 0.5 * done / max(1, work), f"Normalizing {done}/{work}")
+    for c, t in audio_src:
+        norm_a[c.id] = normalize_audio(c, canvas, ffmpeg)
+        done += 1; _prog(0.05 + 0.5 * done / max(1, work), f"Normalizing {done}/{work}")
+
+    _prog(0.6, "Compositing")
     inputs: list[str] = []
     filt: list[str] = []
     idx = 0
 
-    def transparent(dur: float, label: str):
-        filt.append(f"color=c=black:s={W}x{H}:r={FPS}:d={dur:.3f},"
-                    f"format=yuva420p,colorchannelmixer=aa=0,setsar=1[{label}]")
+    def transparent(dur, label):
+        filt.append(f"color=c=black:s={W}x{H}:r={FPS}:d={dur:.3f},format=yuva420p,"
+                    f"colorchannelmixer=aa=0,setsar=1[{label}]")
 
-    # VIDEO — black base canvas, then a folded stream per track overlaid on top.
-    filt.append(f"color=c=black:s={W}x{H}:r={FPS}:d={total:.3f},"
-                f"format={PIX},setsar=1[vbase0]")
-    vbase = "vbase0"
-    ti = 0
-    for t in vtracks:
-        clips = sorted([c for c in t.clips if c.src], key=lambda c: c.start)
-        if not clips:
-            continue
-        acc, acc_end, prev_clip = None, 0.0, None
+    # VIDEO base
+    filt.append(f"color=c=black:s={W}x{H}:r={FPS}:d={total:.3f},format=yuva420p,"
+                f"colorchannelmixer=aa=1,setsar=1[vb0]")
+    vbase = "vb0"
+    vi = 0
+
+    # per-track fold of canvas-sized clips
+    fold_by_track = {}
+    for t, c in fold:
+        fold_by_track.setdefault(t.id, []).append(c)
+    for tid, clips in fold_by_track.items():
+        acc, acc_end, prev = None, 0.0, None
         for c in clips:
             i = idx
             inputs += ["-i", norm_v[c.id]]
             idx += 1
-            chain = (f"[{i}:v]setpts=PTS-STARTPTS,fps={FPS},format=yuva420p,setsar=1")
+            chain = [f"[{i}:v]setpts=PTS-STARTPTS", f"fps={FPS}", "format=yuva420p", "setsar=1"]
             if c.opacity < 0.999:
-                chain += f",colorchannelmixer=aa={max(0.0, min(1.0, c.opacity)):.3f}"
+                chain.append(f"colorchannelmixer=aa={max(0, min(1, c.opacity)):.3f}")
             if c.fade_in > 0.001:
-                chain += f",fade=t=in:st=0:d={c.fade_in:.3f}:alpha=1"
+                chain.append(f"fade=t=in:st=0:d={c.fade_in:.3f}:alpha=1")
             if c.fade_out > 0.001:
-                st = max(0.0, c.dur - c.fade_out)
-                chain += f",fade=t=out:st={st:.3f}:d={c.fade_out:.3f}:alpha=1"
-            chain += f"[cl{i}]"
-            filt.append(chain)
+                chain.append(f"fade=t=out:st={max(0, c.dur - c.fade_out):.3f}:d={c.fade_out:.3f}:alpha=1")
+            filt.append(",".join(chain) + f"[cl{i}]")
             cl = f"cl{i}"
-
             if acc is None:
                 if c.start > 0.001:
                     transparent(c.start, f"gap{i}")
@@ -251,13 +298,13 @@ def export(tl, out_path=None, progress_cb=None) -> str:
                     acc = cl
                 acc_end = c.end
             else:
-                tr = trans_by_left.get(prev_clip.id) if prev_clip else None
+                tr = trans_by_left.get(prev.id) if prev else None
                 if tr and tr.between[1] == c.id:
                     off = max(0.0, acc_end - tr.duration)
-                    filt.append(f"[{acc}][{cl}]xfade=transition=dissolve:"
+                    name = effects.xfade_transition(tr.kind, tr.direction)
+                    filt.append(f"[{acc}][{cl}]xfade=transition={name}:"
                                 f"duration={tr.duration:.3f}:offset={off:.3f}[acc{i}]")
-                    acc = f"acc{i}"
-                    acc_end = acc_end - tr.duration + c.dur
+                    acc = f"acc{i}"; acc_end = acc_end - tr.duration + c.dur
                 else:
                     gap = c.start - acc_end
                     if gap > 0.001:
@@ -265,104 +312,175 @@ def export(tl, out_path=None, progress_cb=None) -> str:
                         filt.append(f"[{acc}][gap{i}][{cl}]concat=n=3:v=1:a=0[acc{i}]")
                     else:
                         filt.append(f"[{acc}][{cl}]concat=n=2:v=1:a=0[acc{i}]")
-                    acc = f"acc{i}"
-                    acc_end = c.end
-            prev_clip = c
-        filt.append(f"[{vbase}][{acc}]overlay=eof_action=pass:format=auto[vb{ti}]")
-        vbase = f"vb{ti}"
-        ti += 1
+                    acc = f"acc{i}"; acc_end = c.end
+            prev = c
+        filt.append(f"[{vbase}][{acc}]overlay=eof_action=pass:format=auto[vb{vi + 1}]")
+        vbase = f"vb{vi + 1}"; vi += 1
+
+    # PiP (positioned/scaled) clips on top
+    for t, c in pip:
+        i = idx
+        inputs += ["-i", norm_v[c.id]]
+        idx += 1
+        g = c.geometry or {}
+        sc = effects.geometry_scale(g)
+        chain = [f"[{i}:v]setpts=PTS-STARTPTS", f"fps={FPS}", "format=yuva420p"]
+        if abs(sc - 1.0) > 1e-3:
+            chain.append(f"scale=iw*{sc:.3f}:ih*{sc:.3f}")
+        if g.get("rotate"):
+            chain.append(f"rotate={float(g['rotate']):.4f}*PI/180:c=black@0:ow=rotw({float(g['rotate']):.4f}*PI/180):oh=roth({float(g['rotate']):.4f}*PI/180)")
+        chain.append("setsar=1")
+        if c.opacity < 0.999:
+            chain.append(f"colorchannelmixer=aa={max(0, min(1, c.opacity)):.3f}")
+        if c.fade_in > 0.001:
+            chain.append(f"fade=t=in:st=0:d={c.fade_in:.3f}:alpha=1")
+        if c.fade_out > 0.001:
+            chain.append(f"fade=t=out:st={max(0, c.dur - c.fade_out):.3f}:d={c.fade_out:.3f}:alpha=1")
+        chain.append(f"tpad=start_duration={c.start:.3f}:start_mode=add:color=black@0")
+        filt.append(",".join(chain) + f"[pip{i}]")
+        x, y = effects.overlay_xy(g)
+        filt.append(f"[{vbase}][pip{i}]overlay=x={x}:y={y}:eof_action=pass:format=auto[vb{vi + 1}]")
+        vbase = f"vb{vi + 1}"; vi += 1
+
+    # text / title clips on top (drawtext, time-gated)
+    for t, c in text:
+        dt = effects.drawtext(c.text, font, W, H)
+        if not dt:
+            continue
+        s, e = c.start, c.end
+        filt.append(f"[{vbase}]{dt}:enable='between(t\\,{s:.3f}\\,{e:.3f})'[vb{vi + 1}]")
+        vbase = f"vb{vi + 1}"; vi += 1
+
     filt.append(f"[{vbase}]format={PIX}[vout]")
 
-    # AUDIO — fade/gain/volume each source, place with adelay, mix + loudnorm.
+    # AUDIO — gain/fade/overlap-fade, delay to position, mix + loudnorm.
+    # Kept in its own list so the (audio-less) GIF path can use video only.
+    _augment_overlap_fades(audio_src)
+    afilt = []
     a_labels = []
     for c, t in audio_src:
         i = idx
         inputs += ["-i", norm_a[c.id]]
         idx += 1
-        ch = f"[{i}:a]aresample={AR},asetpts=PTS-STARTPTS"
+        ch = [f"[{i}:a]aresample={AR}", "asetpts=PTS-STARTPTS"]
         if c.fade_in > 0.001:
-            ch += f",afade=t=in:st=0:d={c.fade_in:.3f}"
+            ch.append(f"afade=t=in:st=0:d={c.fade_in:.3f}")
         if c.fade_out > 0.001:
-            ch += f",afade=t=out:st={max(0.0, c.dur - c.fade_out):.3f}:d={c.fade_out:.3f}"
+            ch.append(f"afade=t=out:st={max(0, c.dur - c.fade_out):.3f}:d={c.fade_out:.3f}")
         gain = float(c.gain_db) + float(getattr(t, "volume_db", 0.0))
         if abs(gain) > 1e-6:
-            ch += f",volume={_gain(gain):.4f}"
-        delay = int(round(max(0.0, c.start) * 1000))
-        ch += f",adelay={delay}:all=1[a{i}]"
-        filt.append(ch)
+            ch.append(f"volume={_gain(gain):.4f}")
+        ch.append(f"adelay={int(round(max(0, c.start) * 1000))}:all=1")
+        afilt.append(",".join(ch) + f"[a{i}]")
         a_labels.append(f"[a{i}]")
-
-    if a_labels:
-        if len(a_labels) == 1:
-            filt.append(f"{a_labels[0]}aresample={AR},loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
-        else:
-            filt.append(f"{''.join(a_labels)}amix=inputs={len(a_labels)}:"
-                        f"duration=longest:normalize=0:dropout_transition=0,"
-                        f"loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
+    if len(a_labels) == 1:
+        afilt.append(f"{a_labels[0]}aresample={AR},loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
+    elif a_labels:
+        afilt.append(f"{''.join(a_labels)}amix=inputs={len(a_labels)}:duration=longest:"
+                     f"normalize=0:dropout_transition=0,loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
     else:
-        filt.append(f"anullsrc=channel_layout=stereo:sample_rate={AR}[aout]")
+        afilt.append(f"anullsrc=channel_layout=stereo:sample_rate={AR}[aout]")
 
-    out_path = str(out_path or _default_out(tl))
+    out_path = str(out_path or _default_out(tl, p["ext"]))
+    if not out_path.endswith(p["ext"]):
+        out_path = str(Path(out_path).with_suffix(p["ext"]))
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    args = [ffmpeg, "-y", *inputs, "-filter_complex", ";".join(filt),
-            "-map", "[vout]", "-map", "[aout]", "-t", f"{total:.3f}",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", PIX,
-            "-c:a", "aac", "-b:a", "192k", "-ar", str(AR),
-            "-movflags", "+faststart", out_path]
-    _progress(0.7, "Encoding")
-    run(args)
-    _progress(1.0, "Done")
+
+    # range trim on output (re-renders from 0 then seeks; correct + simple)
+    r0 = max(0.0, float(start)) if start else 0.0
+    r1 = float(end) if end else total
+    rdur = max(1.0 / FPS, r1 - r0)
+
+    _prog(0.7, "Encoding")
+    if preset == "gif":
+        _encode_gif(ffmpeg, inputs, filt, out_path, r0, rdur, FPS, W)
+    else:
+        full = filt + afilt
+        graph = paths.norm_dir() / f"graph_{hashlib.sha1(';'.join(full).encode()).hexdigest()[:12]}.txt"
+        graph.write_text(";".join(full))
+        crf = QUALITY.get(quality, 18)
+        args = [ffmpeg, "-y", *inputs, "-filter_complex_script", str(graph),
+                "-map", "[vout]", "-map", "[aout]"]
+        if r0 > 0.001:
+            args += ["-ss", f"{r0:.3f}"]
+        args += ["-t", f"{rdur:.3f}", *p["v"]]
+        if preset in ("mp4",):
+            args += ["-crf", str(crf)]
+        args += ["-pix_fmt", PIX, *p["a"], *p["extra"], out_path]
+        run(args)
+    _prog(1.0, "Done")
     return out_path
 
 
-def _default_out(tl) -> str:
+def _augment_overlap_fades(audio_src):
+    """Auto-add symmetric fades over same-track audio overlaps (avoids the sum
+    level-jump / clicks; an equal-gain approximation of acrossfade)."""
+    by_track = {}
+    for c, t in audio_src:
+        by_track.setdefault(t.id, []).append(c)
+    for clips in by_track.values():
+        clips.sort(key=lambda c: c.start)
+        for a, b in zip(clips, clips[1:]):
+            ov = a.end - b.start
+            if ov > 0.02:
+                d = min(ov, a.dur * 0.5, b.dur * 0.5)
+                a.fade_out = max(a.fade_out, d)
+                b.fade_in = max(b.fade_in, d)
+
+
+def _encode_gif(ffmpeg, inputs, filt, out_path, r0, rdur, fps, W):
+    gfps = min(fps, 15)
+    scale = min(W, 640)
+    filt = list(filt) + [f"[vout]fps={gfps},scale={scale}:-1:flags=lanczos,split[gv1][gv2]",
+                         "[gv1]palettegen=stats_mode=diff[pal]",
+                         "[gv2][pal]paletteuse=dither=bayer:bayer_scale=3[gout]"]
+    graph = paths.norm_dir() / f"gif_{hashlib.sha1(';'.join(filt).encode()).hexdigest()[:12]}.txt"
+    graph.write_text(";".join(filt))
+    args = [ffmpeg, "-y", *inputs, "-filter_complex_script", str(graph), "-map", "[gout]"]
+    if r0 > 0.001:
+        args += ["-ss", f"{r0:.3f}"]
+    args += ["-t", f"{rdur:.3f}", out_path]
+    run(args)
+
+
+def _default_out(tl, ext=".mp4") -> str:
     base = paths._safe(getattr(tl, "name", "cut"))
-    p = paths.renders_dir() / f"{base}.mp4"
+    p = paths.renders_dir() / f"{base}{ext}"
     n = 1
     while p.exists():
-        p = paths.renders_dir() / f"{base}_{n}.mp4"
+        p = paths.renders_dir() / f"{base}_{n}{ext}"
         n += 1
     return str(p)
 
 
 # --------------------------------------------------------------------------- #
-#  waveforms (for audio clip thumbnails)                                      #
+#  waveforms + frame extraction                                                #
 # --------------------------------------------------------------------------- #
 
-def waveform(src: str, in_: float, out: float, dest: str,
-             w: int = 400, h: int = 80) -> str | None:
-    """Render a waveform PNG for src[in:out] via showwavespic; cached at dest."""
+def waveform(src, in_, out, dest, w=400, h=80) -> str | None:
     exe = ffmpeg_path()
-    if not exe:
-        return None
-    if Path(dest).exists():
-        return dest
+    if not exe or Path(dest).exists():
+        return dest if Path(dest).exists() else None
     Path(dest).parent.mkdir(parents=True, exist_ok=True)
     dur = max(0.05, float(out) - float(in_))
     try:
-        # Label the audio input explicitly ([0:a]) and map the picture output —
-        # an unlabeled filter_complex pad can't bind to the audio stream of a
-        # multi-stream (video) container.
         run([exe, "-y", "-ss", f"{float(in_):.3f}", "-t", f"{dur:.3f}", "-i", src,
              "-filter_complex",
-             f"[0:a]aformat=channel_layouts=mono,compand,"
-             f"showwavespic=s={w}x{h}:colors=0xe0a106[w]",
+             f"[0:a]aformat=channel_layouts=mono,compand,showwavespic=s={w}x{h}:colors=0xe0a106[w]",
              "-map", "[w]", "-frames:v", "1", dest])
         return dest if Path(dest).exists() else None
     except Exception:
         return None
 
 
-def extract_frame(src: str, t: float, dest: str) -> str | None:
-    """Grab a single frame at time ``t`` (seconds) from ``src`` into ``dest`` (jpg).
-    Used to seed the Video Generator's start / end / anchor keyframe slots."""
+def extract_frame(src, t, dest) -> str | None:
     exe = ffmpeg_path()
     if not exe:
         return None
     Path(dest).parent.mkdir(parents=True, exist_ok=True)
     try:
         run([exe, "-y", "-ss", f"{max(0.0, float(t)):.3f}", "-i", src,
-             "-frames:v", "1", "-q:v", "2", dest])
+             "-frames:v", "1", "-q:v", "2", dest], timeout=60)
         return dest if Path(dest).exists() else None
     except Exception:
         return None

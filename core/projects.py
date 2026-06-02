@@ -122,8 +122,10 @@ def list_projects() -> list[str]:
 def create(name: str, tl: timeline.Timeline | None = None) -> str:
     if not (name or "").strip():
         raise ValueError("Project needs a name.")
-    if exists(name):
-        raise FileExistsError(f"Project '{name}' already exists.")
+    # case/slug-insensitive collision ('Test-1' vs 'Test_1', 'A' vs 'a' on a
+    # case-insensitive filesystem) so two names can't map to one folder.
+    if exists(name) or slug(name).lower() in {slug(n).lower() for n in list_projects()}:
+        raise FileExistsError(f"A project named like '{name}' already exists.")
     project_dir(name).mkdir(parents=True, exist_ok=True)
     _versions_dir(name).mkdir(parents=True, exist_ok=True)
     tl = tl or timeline.Timeline(name=name)
