@@ -85,7 +85,7 @@ _CTX_MENU_JS = (
     "menu.style.cssText='position:fixed;z-index:99999;background:#1f2430;border:1px solid "
     "#3a3f4b;border-radius:8px;padding:4px 0;box-shadow:0 6px 24px rgba(0,0,0,.5);"
     "min-width:210px;font-family:sans-serif;font-size:13px;color:#e5e7eb;';"
-    "var h=document.createElement('div');h.textContent='saintorphan';"
+    "var h=document.createElement('div');h.textContent='OrphanSuite';"
     "h.style.cssText='padding:4px 14px;font-weight:700;color:#e83e8c;cursor:default;"
     "user-select:none;';menu.appendChild(h);"
     "var hr=document.createElement('div');hr.style.cssText='height:1px;background:#3a3f4b;"
