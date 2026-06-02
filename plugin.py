@@ -29,7 +29,7 @@ import gradio as gr
 
 from shared.utils.plugins import WAN2GPPlugin
 
-from .core import discovery, inbox, paths, projects, render, timeline
+from .core import discovery, inbox, otio, paths, projects, render, timeline
 from .ui import logo, settings_panel, suite
 from .ui import timeline_widget as tw
 from .ui.styles import CSS
@@ -127,7 +127,7 @@ class Reel2Reel(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
         self.name = PLUGIN_NAME
-        self.version = "0.3.2"
+        self.version = "0.4.0"
         self.description = ("Multi-track timeline editor: arrange AI clips on "
                             "video/audio tracks, detach/edit audio, transitions, "
                             "projects with versioning, a media library, a shared "
@@ -675,6 +675,9 @@ class Reel2Reel(WAN2GPPlugin):
                          outputs=[c["proj_dd"], c["current_lbl"], c["status"]])
         c["restore_auto"].click(self._restore_autosave,
                                outputs=[self.tl_from_py, self.trk_dd, c["status"]])
+        c["otio_export"].click(self._export_otio, outputs=[c["otio_export"], c["status"]])
+        c["otio_import"].upload(self._import_otio, inputs=[c["otio_import"]],
+                               outputs=[self.tl_from_py, self.trk_dd, c["status"]])
         # Versions (manual named snapshots)
         c["snapshot"].click(self._snapshot, inputs=[c["ver_label"]],
                            outputs=[c["ver_dd"], c["ver_label"], c["status"]])
@@ -938,7 +941,34 @@ class Reel2Reel(WAN2GPPlugin):
         if tl is None:
             raise gr.Error(f"Could not open '{name}'.")
         self._switch_to(name, tl)
-        return self._proj_io(f"Opened **{name}**.")
+        missing = [c.label or c.id for _, c in tl.all_clips()
+                   if c.src and not Path(c.src).exists()]
+        msg = f"Opened **{name}**."
+        if missing:
+            msg += (f" ⚠️ {len(missing)} clip source(s) missing "
+                    f"({', '.join(missing[:3])}{'…' if len(missing) > 3 else ''}) — relink before export.")
+        return self._proj_io(msg)
+
+    def _export_otio(self):
+        out = str(paths.renders_dir() / f"{paths._safe(self._project.name)}.otio")
+        try:
+            otio.write_otio_file(self._project, out)
+        except Exception as e:
+            return gr.update(), f"⚠️ OTIO export failed: {e}"
+        return gr.update(value=out), f"Exported `{out}` (OpenTimelineIO)."
+
+    def _import_otio(self, fileobj):
+        if not fileobj:
+            raise gr.Error("Choose a .otio file.")
+        try:
+            data = json.loads(Path(fileobj.name).read_text())
+            self._push_undo()
+            self._project = otio.from_otio(data)
+            self._last_sig = self._content_sig()
+        except Exception as e:
+            raise gr.Error(f"Could not import OTIO: {e}")
+        return (self._env_after(), gr.update(choices=self._track_choices()),
+                f"Imported **{Path(fileobj.name).name}** ({len(list(self._project.all_clips()))} clips).")
 
     def _restore_autosave(self):
         p = paths.autosave_path()
@@ -1058,6 +1088,8 @@ class Reel2Reel(WAN2GPPlugin):
                     c["range_start"], c["range_end"]],
             outputs=[c["video"], c["save_as"], c["log"]])
         c["cancel"].click(self._cancel_render, outputs=[c["log"]])
+        c["preview"].click(self._preview, inputs=[c["preview_secs"]],
+                          outputs=[c["video"], c["log"]])
         targets = [(n, getattr(self, n, None)) for n in
                    ("image_start", "image_prompt_type_radio", "image_start_row", "main_tabs")]
         self._i2v_targets = [n for n, comp in targets if comp is not None]
@@ -1096,6 +1128,26 @@ class Reel2Reel(WAN2GPPlugin):
     def _cancel_render(self):
         self._cancel_event.set()
         return "Cancelling render…"
+
+    def _preview(self, secs, progress=gr.Progress()):
+        """A true low-res composite of a window at the playhead (the real cut)."""
+        self._cancel_event.clear()
+        ph = float((self._project.ui or {}).get("playhead", 0.0))
+        secs = float(secs or 8)
+        pw = 480
+        phh = max(2, int(round(self._project.height * pw / max(1, self._project.width))) // 2 * 2)
+        try:
+            out = render.export(
+                self._project, out_path=str(paths.cache_dir() / "preview.mp4"),
+                preset="mp4", quality="low", width=pw, height=phh,
+                start=ph, end=ph + secs, cancel=self._cancel_event,
+                progress_cb=lambda f, d: progress(f, desc="Preview: " + d))
+        except render.RenderError as e:
+            return gr.update(), f"❌ {e}"
+        except Exception as e:
+            traceback.print_exc()
+            return gr.update(), f"❌ Preview failed: {e}"
+        return out, f"👁 Composite preview {ph:.1f}–{ph + secs:.1f}s ({pw}px)."
 
     def _send_to_img2vid(self):
         names = getattr(self, "_i2v_targets", [])

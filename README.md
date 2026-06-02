@@ -6,12 +6,13 @@ A **multi-track timeline video editor** inside Wan2GP. Generate clips with the
 Video Generator (or anywhere else), **send them to Reel2Reel**, arrange them on
 video/audio tracks, trim and split, then **export a final cut** with ffmpeg.
 
-> ⚠️ **Early build (v0.3.0) — improving fast.** Multi-track video/audio,
-> **detach audio from video**, fades/opacity, mute/solo, cross-dissolves,
-> undo/redo, **Projects with named-snapshot versioning**, a **global + per-project
-> media library**, a **shared right-click menu**, and ffmpeg export all work. The
-> in-browser preview is still a single approximate `<video>` (export for the real
-> composite). Expect rough edges.
+> **v0.4.0.** Multi-track video/audio, **detach audio**, fades/opacity/**color**,
+> **speed/reverse**, **titles**, **PiP/transforms**, mute/solo, **5 transition
+> types**, **markers**, undo/redo, **Projects + versioning**, a **global +
+> per-project library**, a **shared right-click menu**, **export presets**
+> (mp4/webm/prores/gif) + range, a **real composite preview**, cancelable async
+> render, autosave, and OTIO interchange. The Timeline-tab scrub preview is still
+> a single approximate `<video>` — use **Render → Preview** for the true composite.
 
 | Sub-tab | What it does |
 |---------|--------------|

@@ -2,11 +2,9 @@
 # Wan2GP already provides gradio, Pillow and numpy, and bundles/needs ffmpeg.
 # The timeline UI is hand-rolled vanilla JS (no JS build step, no npm).
 #
-# Everything below is OPTIONAL — the plugin loads and renders without them:
-#   - imageio-ffmpeg : a fallback ffmpeg binary if the system one is missing
-#                      (the plugin prefers /usr/bin/ffmpeg or $REEL2REEL_FFMPEG).
-#   - opentimelineio : enables canonical .otio import/export (core/otio.py works
-#                      without it via a pure-dict path; the library adds the file
-#                      round-trip and FCPXML/AAF/EDL adapters).
-imageio-ffmpeg
-# opentimelineio
+# We deliberately do NOT pin gradio/Pillow/numpy here — Reel2Reel runs inside the
+# host's environment and must use the host's versions (verified against gradio
+# 5.29). These extras are additive:
+imageio-ffmpeg        # fallback ffmpeg binary if the system one is missing
+opentimelineio>=0.15  # .otio interchange (Resolve / Premiere / FCPXML); core/otio.py
+                      # also has a pure-dict fallback that works without it.

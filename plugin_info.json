@@ -1,7 +1,7 @@
 {
   "name": "Reel2Reel",
   "author": "saintorphan",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Multi-track timeline video editor: arrange AI clips on video/audio tracks, detach/edit audio, cross-dissolves, undo/redo, Projects with named-snapshot versioning, a global + per-project media library, a shared saintorphan right-click menu, and ffmpeg export.",
   "date": "",
   "wan2gp_version": "",

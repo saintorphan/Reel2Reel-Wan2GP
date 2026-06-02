@@ -1,0 +1,27 @@
+# Move this file to .github/workflows/test.yml to enable CI.
+# (Pushing under .github/workflows needs a token with 'workflow' scope.)
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ffmpeg + deps
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
+          python -m pip install --upgrade pip Pillow
+      - name: Offline core tests (model + projects + real ffmpeg render)
+        run: python tests/test_core.py
+      - name: Lint (syntax) all modules + timeline JS
+        run: |
+          python -m py_compile plugin.py core/*.py ui/*.py tools/*.py tests/*.py
+          node --check assets/static/timeline.js

@@ -163,6 +163,11 @@ def _timeline() -> dict:
             c["ver_dd"] = gr.Dropdown(label="Versions", choices=[], scale=2)
             c["restore"] = gr.Button("Restore")
             c["delver"] = gr.Button("Delete version")
+        gr.Markdown("**Interchange** — OpenTimelineIO (Resolve / Premiere / FCPXML)")
+        with gr.Row():
+            c["otio_export"] = gr.DownloadButton("⬇ Export .otio", size="sm")
+            c["otio_import"] = gr.UploadButton("⬆ Import .otio", file_types=[".otio", ".json"],
+                                              size="sm")
     c["status"] = gr.Markdown("")
     return c
 
@@ -190,7 +195,13 @@ def _render() -> dict:
                                elem_classes="reel2reel-prim", scale=1)
         c["cancel"] = gr.Button("✖ Cancel", scale=0)
         c["to_i2v"] = gr.Button("→ Send final cut to Img2Vid", scale=1)
-    c["video"] = gr.Video(label="Rendered cut", height=420, interactive=False)
+    gr.Markdown("**Preview** renders a low-res composite window at the playhead — "
+                "the true cut (transitions, overlays, audio), unlike the approximate "
+                "scrub preview on the Timeline tab.")
+    with gr.Row():
+        c["preview"] = gr.Button("👁 Preview at playhead", scale=1)
+        c["preview_secs"] = gr.Slider(2, 30, value=8, step=1, label="Window (s)", scale=1)
+    c["video"] = gr.Video(label="Rendered cut / preview", height=420, interactive=False)
     c["save_as"] = gr.DownloadButton("Save As…", size="sm")
     c["log"] = gr.Markdown("")
     return c

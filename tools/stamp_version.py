@@ -19,7 +19,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-VERSION = "v0.3.2"
+VERSION = "v0.4.0"
 COLOR = (255, 209, 26, 255)        # gold, to echo the glowing "2"
 STROKE = (16, 16, 20, 255)         # dark outline so it reads over the chrome
 STROKE_W = 3
