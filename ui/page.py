@@ -189,7 +189,7 @@ def _render() -> dict:
                                            elem_classes="reel2reel-prim")
                     with gr.Row():
                         c["cancel"] = gr.Button("✖ Cancel", scale=0)
-                        c["to_i2v"] = gr.Button("→ Final cut to Img2Vid", scale=1)
+                        c["to_i2v"] = gr.Button("→ Send final cut to Vid2Vid", scale=1)
                     with gr.Row():
                         c["preview"] = gr.Button("👁 Preview at playhead", scale=2)
                         c["preview_secs"] = gr.Slider(2, 30, value=8, step=1,

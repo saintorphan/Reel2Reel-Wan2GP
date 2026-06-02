@@ -8,7 +8,7 @@
   --r2r-lane: #1f2128;
   --r2r-edge: #33363f;
   color: #e9e6df;
-  font-size: 12px;
+  font-size: 14px;
   user-select: none;
 }
 
@@ -33,21 +33,21 @@
 }
 
 .r2r-tl .r2r-ruler {
-  position: relative; height: 22px; min-width: 600px;
+  position: relative; height: 26px; min-width: 600px;
   border-bottom: 1px solid var(--r2r-edge);
-  margin-left: 96px; cursor: text;
+  margin-left: 132px; cursor: text;          /* MUST equal .r2r-head width */
 }
 .r2r-tl .r2r-tick {
-  position: absolute; top: 0; height: 22px;
+  position: absolute; top: 0; height: 26px;
   border-left: 1px solid var(--r2r-edge);
-  padding-left: 3px; color: #8b8f99; font-size: 10px; line-height: 22px;
+  padding-left: 4px; color: #8b8f99; font-size: 12px; line-height: 26px;
 }
 
 .r2r-tl .r2r-lanes { position: relative; }
 .r2r-tl .r2r-track { display: flex; align-items: stretch; height: 52px; }
 .r2r-tl .r2r-head {
   position: relative;
-  width: 112px; min-width: 112px; display: flex; flex-direction: column;
+  width: 132px; min-width: 132px; display: flex; flex-direction: column;
   justify-content: center; gap: 3px;
   padding: 0 8px; color: #c9c6bf; background: #1a1c22;
   border-right: 1px solid var(--r2r-edge); border-bottom: 1px solid var(--r2r-edge);
@@ -55,19 +55,19 @@
 }
 .r2r-tl .r2r-trk-name {
   overflow: hidden; text-overflow: ellipsis; font-weight: 600; cursor: text;
-  padding-right: 16px;                 /* clear the absolute collapse caret */
+  font-size: 14px; padding-right: 22px;       /* clear the absolute collapse caret */
 }
 .r2r-tl .r2r-collapse {
-  position: absolute; top: 2px; right: 4px; width: 16px; height: 16px; padding: 0;
-  background: transparent; color: #8b8f99; border: 0; cursor: pointer; font-size: 10px;
+  position: absolute; top: 2px; right: 4px; width: 22px; height: 22px; padding: 0;
+  background: transparent; color: #8b8f99; border: 0; cursor: pointer; font-size: 14px;
 }
 /* meta row: kind label + M/S/L toggle buttons */
-.r2r-tl .r2r-trk-ctrl { display: flex; align-items: center; gap: 3px; }
-.r2r-tl .r2r-trk-ctrl small { color: #7f8490; font-size: 9px; margin-right: 1px; }
+.r2r-tl .r2r-trk-ctrl { display: flex; align-items: center; gap: 4px; }
+.r2r-tl .r2r-trk-ctrl small { color: #7f8490; font-size: 11px; margin-right: 1px; }
 .r2r-tl .r2r-trk-flag {
-  width: 16px; height: 15px; padding: 0; font-size: 9px; font-weight: 700; line-height: 1;
+  width: 24px; height: 21px; padding: 0; font-size: 12px; font-weight: 700; line-height: 1;
   background: #23262e; color: #8b8f99; border: 1px solid var(--r2r-edge);
-  border-radius: 3px; cursor: pointer;
+  border-radius: 4px; cursor: pointer;
 }
 .r2r-tl .r2r-trk-flag:hover { color: #fff; border-color: var(--r2r-amber-dk); }
 .r2r-tl .r2r-trk-flag.active {
@@ -83,7 +83,7 @@
 }
 .r2r-tl .r2r-trk-resize:hover { background: var(--r2r-amber-dk); }
 .r2r-tl .r2r-empty {
-  padding: 30px 20px; text-align: center; color: #8b8f99; font-size: 13px; line-height: 1.6;
+  padding: 30px 20px; text-align: center; color: #8b8f99; font-size: 15px; line-height: 1.7;
 }
 /* right-click track-head menu (appended to <body>, so not scoped under .r2r-tl) */
 .r2r-trk-menu {
@@ -91,9 +91,12 @@
   border-radius: 8px; padding: 4px; display: flex; flex-direction: column;
   min-width: 154px; box-shadow: 0 6px 24px rgba(0,0,0,0.5);
 }
+.r2r-trk-menu {
+  min-width: 188px;
+}
 .r2r-trk-menu button {
   text-align: left; background: transparent; color: #e9e6df; border: 0;
-  border-radius: 5px; padding: 6px 10px; font-size: 12px; cursor: pointer;
+  border-radius: 5px; padding: 9px 14px; font-size: 14px; cursor: pointer;
 }
 .r2r-trk-menu button:hover:not(:disabled) { background: #23262e; }
 .r2r-trk-menu button:disabled { color: #5a5e68; cursor: default; }
@@ -101,7 +104,8 @@
 
 .r2r-tl .r2r-help {
   background: transparent; color: #c9c6bf; border: 1px solid var(--r2r-edge);
-  border-radius: 50%; width: 22px; height: 22px; cursor: pointer; font-weight: 700;
+  border-radius: 50%; width: 28px; height: 28px; cursor: pointer; font-weight: 700;
+  font-size: 15px;
 }
 .r2r-help-modal {
   position: fixed; inset: 0; z-index: 100000; background: rgba(0,0,0,0.55);
@@ -138,7 +142,7 @@
 .r2r-tl .r2r-clip.sel { outline: 2px solid #fff; z-index: 3; }
 .r2r-tl .r2r-label {
   position: absolute; left: 6px; bottom: 3px; right: 6px;
-  font-size: 11px; color: #1a1405; font-weight: 600;
+  font-size: 13px; color: #1a1405; font-weight: 600;
   text-shadow: 0 1px 0 rgba(255,255,255,0.25);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   pointer-events: none;
@@ -152,7 +156,7 @@
 .r2r-tl .r2r-handle.r { right: 0; }
 
 .r2r-tl .r2r-playhead {
-  position: absolute; top: 0; left: 96px; width: 2px; height: 100%;
+  position: absolute; top: 0; left: 132px; width: 2px; height: 100%;   /* = .r2r-head width */
   background: #ff3b3b; pointer-events: none; z-index: 4;
 }
 
@@ -165,10 +169,10 @@
 
 /* ruler markers (downward flag) */
 .r2r-tl .r2r-marker {
-  position: absolute; top: 0; width: 0; height: 0; z-index: 3; cursor: help;
-  border-left: 5px solid transparent; border-right: 5px solid transparent;
-  border-top: 9px solid #e0a106;
-  transform: translateX(-5px);
+  position: absolute; top: 0; width: 0; height: 0; z-index: 3; cursor: context-menu;
+  border-left: 7px solid transparent; border-right: 7px solid transparent;
+  border-top: 13px solid #e0a106;
+  transform: translateX(-7px);
 }
 
 /* fades, opacity, transitions, mute */
@@ -190,15 +194,17 @@
 .r2r-tl .r2r-sep { width: 1px; align-self: stretch; background: var(--r2r-edge); margin: 2px 4px; }
 .r2r-tl .r2r-btn {
   background: #23262e; color: #e9e6df; border: 1px solid var(--r2r-edge);
-  border-radius: 5px; padding: 3px 8px; font-size: 12px; line-height: 1; cursor: pointer;
+  border-radius: 5px; padding: 6px 11px; font-size: 15px; line-height: 1.1; cursor: pointer;
 }
 .r2r-tl .r2r-btn:hover { border-color: var(--r2r-amber-dk); color: #fff; }
 .r2r-tl .r2r-btn.active { background: var(--r2r-amber); color: #1a1405; border-color: var(--r2r-amber-dk); }
 .r2r-tl .r2r-razor.active { background: #ff3b3b; color: #fff; border-color: #b02020; }
 .r2r-tl.r2r-razor-on .r2r-clip { cursor: crosshair; }
-.r2r-tl .r2r-readout { color: #c9c6bf; font-variant-numeric: tabular-nums; padding: 0 4px; }
-.r2r-tl .r2r-zoom { accent-color: var(--r2r-amber); width: 90px; }
-.r2r-tl .r2r-zoomval { color: #8b8f99; font-variant-numeric: tabular-nums; min-width: 54px; text-align: right; }
+.r2r-tl .r2r-readout { color: #c9c6bf; font-variant-numeric: tabular-nums; padding: 0 6px;
+  font-size: 15px; }
+.r2r-tl .r2r-zoom { accent-color: var(--r2r-amber); width: 120px; height: 18px; }
+.r2r-tl .r2r-zoomval { color: #8b8f99; font-variant-numeric: tabular-nums; min-width: 60px;
+  text-align: right; font-size: 13px; }
 .r2r-tl .r2r-seq-pop {
   position: absolute; z-index: 50; top: 28px; right: 0; background: #15161a;
   border: 1px solid var(--r2r-edge); border-radius: 8px; padding: 10px 12px;

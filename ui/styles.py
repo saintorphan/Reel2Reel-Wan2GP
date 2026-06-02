@@ -6,9 +6,23 @@ _ACCENT = "#e0a106"      # reel-to-reel amber/gold
 _ACCENT_DK = "#b07d00"
 
 CSS = f"""
-#reel2reel-root {{ position: relative; }}
+#reel2reel-root {{ position: relative; font-size: 15px; }}
 #reel2reel-root .reel2reel-acc {{ border-radius: 10px; }}
 .reel2reel-hidden {{ display: none !important; }}
+
+/* ---- legibility: bigger controls + text everywhere (scoped to our root) ---- */
+#reel2reel-root button {{ font-size: 14px !important; min-height: 38px; }}
+#reel2reel-root .tab-nav button {{ font-size: 15px !important; padding: 8px 14px; }}
+#reel2reel-root label, #reel2reel-root .label-wrap span,
+#reel2reel-root .gradio-slider label {{ font-size: 14px !important; }}
+#reel2reel-root input, #reel2reel-root textarea,
+#reel2reel-root select, #reel2reel-root .gr-box {{ font-size: 14px !important; }}
+#reel2reel-root .prose, #reel2reel-root .prose p {{ font-size: 14px; }}
+#reel2reel-root .gallery .caption, #reel2reel-root .thumbnail-item .caption {{ font-size: 12px; }}
+/* compact icon buttons opt out of the min-height so they stay square-ish */
+#reel2reel-root #r2r-pb-open, #reel2reel-root #r2r-pb-save,
+#reel2reel-root #r2r-pb-snap, #reel2reel-root #reel2reel-lib-refresh {{
+    min-height: 34px; }}
 
 /* Green-coded main-webui tab button (tagged from JS in plugin.py), matching the
    other saintorphan plugins' tab color-coding (ImageSuite pink, Replicant violet). */

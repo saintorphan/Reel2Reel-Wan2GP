@@ -234,12 +234,14 @@ class Reel2Reel(WAN2GPPlugin):
         self.ver_dd = bar["ver_dd"]
         self.bin_gallery = lib["bin_gallery"]
         self.global_gallery = lib["global_gallery"]
+        self.gallery = lib["gallery"]                 # Outputs drawer (auto-loaded on entry)
         self._last_sig = self._content_sig()
         self._wire(ui)
         # On tab entry: drain the inbox, reload the timeline, refresh tracks /
         # project list / versions / both media bins.
         self.on_tab_outputs = [self.tl_from_py, self.trk_dd, self.proj_dd,
-                               self.ver_dd, self.bin_gallery, self.global_gallery]
+                               self.ver_dd, self.bin_gallery, self.global_gallery,
+                               self.gallery]
         return ui
 
     # -- inbox --------------------------------------------------------------
@@ -256,7 +258,8 @@ class Reel2Reel(WAN2GPPlugin):
         return (self._load_envelope(), gr.update(choices=self._track_choices()),
                 gr.update(choices=projects.list_projects(), value=self._project_name),
                 gr.update(choices=self._ver_choices()),
-                self._bin_value(), self._gbin_value())
+                self._bin_value(), self._gbin_value(),
+                self._refresh_library()[0])           # auto-populate the Outputs drawer
 
     # -- envelopes / signatures --------------------------------------------
     def _edit_payload(self) -> dict:
@@ -1386,16 +1389,23 @@ class Reel2Reel(WAN2GPPlugin):
         c["cancel"].click(self._cancel_render, outputs=[c["log"]])
         c["preview"].click(self._preview, inputs=[c["preview_secs"]],
                           outputs=[c["video"], c["log"]])
-        targets = [(n, getattr(self, n, None)) for n in
-                   ("image_start", "image_prompt_type_radio", "image_start_row", "main_tabs")]
-        self._i2v_targets = [n for n, comp in targets if comp is not None]
-        comps = [comp for _, comp in targets if comp is not None]
-        if comps:
-            # Return values POSITIONALLY (matching outputs order), not as a dict —
-            # unambiguous across Gradio versions.
-            c["to_i2v"].click(self._send_to_img2vid, outputs=comps)
+        # The final cut is a VIDEO, so send it to the Video Generator as a Vid2Vid
+        # source — the same host path the clip menu's "Send to Vid2Vid" uses
+        # (get_current_model_settings + a form-refresh trigger + tab switch).
+        state = getattr(self, "state", None)
+        rft = getattr(self, "refresh_form_trigger", None)
+        mt = getattr(self, "main_tabs", None)
+        can = state is not None and callable(getattr(self, "get_current_model_settings", None))
+        if can:
+            out, self._cut_out = [], []
+            if rft is not None:
+                out.append(rft); self._cut_out.append("rft")
+            if mt is not None:
+                out.append(mt); self._cut_out.append("mt")
+            out.append(c["log"]); self._cut_out.append("log")
+            c["to_i2v"].click(self._send_cut_to_vid2vid, inputs=[state], outputs=out)
         else:
-            c["to_i2v"].click(self._img2vid_unavailable, outputs=[c["log"]])
+            c["to_i2v"].click(self._cut_unavailable, outputs=[c["log"]])
 
     def _render(self, preset, quality, resolution, range_on, rstart, rend,
                 progress=gr.Progress()):
@@ -1445,43 +1455,42 @@ class Reel2Reel(WAN2GPPlugin):
             return gr.update(), f"❌ Preview failed: {e}"
         return out, f"👁 Composite preview {ph:.1f}–{ph + secs:.1f}s ({pw}px)."
 
-    def _send_to_img2vid(self):
-        names = getattr(self, "_i2v_targets", [])
+    def _send_cut_to_vid2vid(self, state):
+        """Hand the exported cut to the Video Generator as a Vid2Vid source — same
+        host path as the clip menu's "Send to Vid2Vid", but on the whole render."""
+        names = getattr(self, "_cut_out", ["log"])
+        upd = {n: gr.update() for n in names}
 
-        def _pack(vals):
-            return vals[0] if len(names) == 1 else tuple(vals)
+        def pack():
+            return upd[names[0]] if len(names) == 1 else tuple(upd[n] for n in names)
 
         if not self._last_render:
             gr.Warning("Export a cut first.")
-            return _pack([gr.update() for _ in names])
-        frame = None
-        gvf = getattr(self, "get_video_frame", None)
-        if callable(gvf):
-            try:
-                frame = gvf(self._last_render, 0)
-            except Exception:
-                frame = None
-        vals = []
-        for n in names:
-            if n == "image_start":
-                vals.append([(frame, "Final Cut Frame")] if frame is not None else gr.update())
-            elif n == "image_prompt_type_radio":
-                vals.append(gr.update(value="S"))
-            elif n == "image_start_row":
-                vals.append(gr.update(visible=True))
-            elif n == "main_tabs":
-                vals.append(gr.Tabs(selected="video_gen"))
-        if "main_tabs" in names:
-            gr.Info("Sent the final-cut frame to the Video Generator (Img2Vid start frame).")
-        else:
-            gr.Info("Open the Video Generator and use your rendered cut as the start frame.")
-        return _pack(vals)
+            upd["log"] = "Export a cut first, then send it to Vid2Vid."
+            return pack()
+        try:
+            s = self.get_current_model_settings(state)
+            s["video_source"] = self._last_render
+            ipt = s.get("image_prompt_type") or ""
+            if "V" not in ipt:
+                s["image_prompt_type"] = ("V" + ipt) if ipt else "V"
+        except Exception:
+            traceback.print_exc()
+            upd["log"] = "❌ Couldn't hand the cut to the Video Generator."
+            return pack()
+        if "rft" in upd:
+            upd["rft"] = time.time()
+        if "mt" in upd:
+            upd["mt"] = gr.Tabs(selected="video_gen")
+        upd["log"] = "✅ Sent the final cut → Vid2Vid source."
+        gr.Info("Sent the final cut to the Video Generator (Vid2Vid source).")
+        return pack()
 
-    def _img2vid_unavailable(self):
+    def _cut_unavailable(self):
         if not self._last_render:
             return "Export a cut first, then open the Video Generator to use it."
         return (f"Open the Video Generator and load `{self._last_render}` as the "
-                "Img2Vid start frame.")
+                "Vid2Vid video source.")
 
     # -- settings -----------------------------------------------------------
     def _server_config(self):

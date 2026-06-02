@@ -171,10 +171,10 @@
     if (!S.ruler) return;
     (S.edit.markers || []).forEach(function (m) {
       var el = document.createElement("div");
-      el.className = "r2r-marker";
+      el.className = "r2r-marker"; el.dataset.mid = m.id;
       el.style.left = sec2px(m.t) + "px";
       el.style.borderTopColor = m.color || "#e0a106";
-      el.title = m.label || ("marker @ " + (m.t || 0).toFixed(2) + "s");
+      el.title = (m.label ? m.label + " · " : "") + "right-click to rename / delete";
       S.ruler.appendChild(el);
     });
   }
@@ -821,6 +821,29 @@
     }
     placeMenu(menu, ev);
   }
+  function openMarkerMenu(ev, el) {
+    ev.preventDefault(); closeTrackMenu();
+    var mid = el.dataset.mid;
+    var m = (S.edit.markers || []).filter(function (x) { return x.id === mid; })[0];
+    if (!m) return;
+    var menu = document.createElement("div");
+    menu.className = "r2r-trk-menu"; menu.id = "r2r-trk-menu";
+    function add(label, fn) {
+      var b = document.createElement("button"); b.textContent = label;
+      b.addEventListener("click", function () { closeTrackMenu(); fn(); });
+      menu.appendChild(b);
+    }
+    add("⏎ Go to marker", function () { stop(); setPlayhead(m.t || 0); commit(); });
+    add("✎ Rename…", function () {
+      var v = window.prompt("Marker label:", m.label || "");
+      if (v != null) { m.label = v; renderAll(); commit(); }
+    });
+    add("🗑 Delete marker", function () {
+      S.edit.markers = (S.edit.markers || []).filter(function (x) { return x.id !== mid; });
+      renderAll(); commit();
+    });
+    placeMenu(menu, ev);
+  }
   function syncSnapBox() {
     var b = S.root && S.root.querySelector('[data-act="snap"]');
     if (b) b.classList.toggle("active", S.snap);
@@ -1035,6 +1058,8 @@
       if (th) { e.stopImmediatePropagation(); e.preventDefault(); openLibMenu(e, th); return; }
       var cl = e.target.closest && e.target.closest(".r2r-timeline-clip");
       if (cl) { e.stopImmediatePropagation(); e.preventDefault(); openClipMenu(e, cl); return; }
+      var mk = e.target.closest && e.target.closest(".r2r-marker");
+      if (mk) { e.stopImmediatePropagation(); e.preventDefault(); openMarkerMenu(e, mk); return; }
     }, true);
   }
 
