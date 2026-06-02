@@ -12,7 +12,8 @@ import base64
 from pathlib import Path
 
 _ASSETS = Path(__file__).resolve().parent.parent / "assets"
-_LOGO = _ASSETS / "reel2reel_logo.png"
+# The version-stamped copy (tools/stamp_version.py), same as Replicant's banner.
+_LOGO = _ASSETS / "reel2reel.png"
 
 
 def _logo_data_uri() -> str:

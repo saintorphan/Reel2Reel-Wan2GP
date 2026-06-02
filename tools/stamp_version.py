@@ -3,11 +3,14 @@
 
 Always renders from the pristine no-badge base (assets/reel2reel_base.png) so the
 badge never accumulates. Writes both reel2reel.png (repo root, for the README)
-and assets/reel2reel.png (served by the plugin banner).
+and assets/reel2reel.png (served by the plugin banner — see ui/logo.py).
+
+The REEL2REEL artwork is full-bleed (the wordmark + glow fill the whole canvas),
+so the badge sits bottom-right with a dark stroke to stay legible over the chrome.
 
 Usage:
     python tools/stamp_version.py            # uses VERSION below
-    python tools/stamp_version.py v0.2.0     # override the label
+    python tools/stamp_version.py v0.3.0     # override the label
 
 --- Badge parameters (tweak here; the badge will change often until stable) ---
 """
@@ -17,14 +20,15 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 VERSION = "v0.2.0"
-# Amber sampled from the "REEL2REEL" wordmark.
-COLOR = (224, 161, 6, 255)
+COLOR = (255, 209, 26, 255)        # gold, to echo the glowing "2"
+STROKE = (16, 16, 20, 255)         # dark outline so it reads over the chrome
+STROKE_W = 3
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-FONT_SIZE = 34
-# Bottom-left, inside the inner border. anchor="ls" = left edge / baseline.
-POS_X = 83
-POS_Y_FROM_BOTTOM = 42       # baseline = image_height - this
-ANCHOR = "ls"
+FONT_SIZE = 40
+# Bottom-right; anchor "rs" = right edge / baseline.
+POS_X_FROM_RIGHT = 26
+POS_Y_FROM_BOTTOM = 22
+ANCHOR = "rs"
 
 ROOT = Path(__file__).resolve().parent.parent
 BASE = ROOT / "assets" / "reel2reel_base.png"
@@ -38,11 +42,11 @@ def stamp(version: str = VERSION) -> None:
     except Exception:
         font = ImageFont.load_default()
     draw = ImageDraw.Draw(img)
-    draw.text((POS_X, H - POS_Y_FROM_BOTTOM), version, font=font, fill=COLOR, anchor=ANCHOR)
-    # Keep RGBA on BOTH so the transparent background is preserved.
+    draw.text((W - POS_X_FROM_RIGHT, H - POS_Y_FROM_BOTTOM), version, font=font,
+              fill=COLOR, anchor=ANCHOR, stroke_width=STROKE_W, stroke_fill=STROKE)
     img.save(ROOT / "reel2reel.png")
     img.save(ROOT / "assets" / "reel2reel.png")
-    print(f"stamped {version!r} at x={POS_X}, baseline_y={H - POS_Y_FROM_BOTTOM}, size={FONT_SIZE}")
+    print(f"stamped {version!r} bottom-right of {W}x{H} (size={FONT_SIZE})")
 
 
 if __name__ == "__main__":
