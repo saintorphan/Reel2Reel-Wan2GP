@@ -74,6 +74,7 @@
   // ---- geometry -------------------------------------------------------------
   function sec2px(s) { return s * S.pxPerSec; }
   function px2sec(p) { return p / S.pxPerSec; }
+  function ph() { return (S.edit.ui && S.edit.ui.playhead) || 0; }
   function clips() { return S.edit.clips || []; }
   function totalDur() {
     return clips().reduce(function (m, c) { return Math.max(m, (c.start || 0) + (c.dur || 0)); }, 0);
@@ -109,7 +110,26 @@
     });
     var w = Math.max(600, sec2px(totalDur()) + 200);
     S.ruler.style.width = w + "px";
-    drawRuler(); placePlayhead(); driveVideo(); updateReadout(); syncSeq();
+    drawRuler(); renderMarkers(); placePlayhead(); driveVideo(); updateReadout(); syncSeq();
+  }
+  function renderMarkers() {
+    if (!S.ruler) return;
+    (S.edit.markers || []).forEach(function (m) {
+      var el = document.createElement("div");
+      el.className = "r2r-marker";
+      el.style.left = sec2px(m.t) + "px";
+      el.style.borderTopColor = m.color || "#e0a106";
+      el.title = m.label || ("marker @ " + (m.t || 0).toFixed(2) + "s");
+      S.ruler.appendChild(el);
+    });
+  }
+  function laneAt(clientY) {
+    var lanes = S.lanes ? S.lanes.querySelectorAll(".r2r-lane") : [];
+    for (var i = 0; i < lanes.length; i++) {
+      var r = lanes[i].getBoundingClientRect();
+      if (clientY >= r.top && clientY <= r.bottom) return lanes[i].dataset.track;
+    }
+    return null;
   }
 
   function renderClip(c, t) {
@@ -119,7 +139,8 @@
     // this surface and read the clip's frame/image from data-media-src.
     el.className = "r2r-clip r2r-timeline-clip"
       + (S.edit.ui && S.edit.ui.selected === c.id ? " sel" : "")
-      + (c.mute ? " muted" : "");
+      + (c.mute ? " muted" : "")
+      + (c.type === "text" ? " r2r-text" : "");
     el.dataset.id = c.id;
     el.setAttribute("data-media-src", c.thumb_url || c.url || "");
     el.style.transform = "translateX(" + sec2px(c.start) + "px)";
@@ -214,8 +235,11 @@
   function togglePlay() { S.playing ? (stop(), commit()) : play(); }
 
   // ---- interaction ----------------------------------------------------------
+  function trackById(id) {
+    return (S.edit.tracks || []).filter(function (t) { return t.id === id; })[0] || null;
+  }
   function wireClip(el, c, hl, hr) {
-    var mode = null, x0 = 0, start0 = 0, in0 = 0, out0 = 0, moved = false;
+    var mode = null, x0 = 0, start0 = 0, in0 = 0, out0 = 0, moved = false, dropTrack = null;
     function down(e, m) {
       e.preventDefault(); e.stopPropagation();
       mode = m; x0 = e.clientX; start0 = c.start; in0 = c.in; out0 = c.out; moved = false;
@@ -229,6 +253,7 @@
       if (mode === "move") {
         c.start = snapVal(Math.max(0, start0 + ds));
         el.style.transform = "translateX(" + sec2px(c.start) + "px)";
+        var lane = laneAt(e.clientY); if (lane) dropTrack = lane;
       } else if (mode === "l") {
         var ni = Math.min(out0 - 1 / (S.edit.fps || 24), Math.max(0, in0 + ds));
         c.in = ni; c.start = Math.max(0, start0 + (ni - in0)); c.dur = c.out - c.in;
@@ -239,7 +264,14 @@
         el.style.width = Math.max(8, sec2px(c.dur)) + "px";
       }
     }
-    function up() { window.removeEventListener("pointermove", move); mode = null; renderAll(); commit(); endInteract(); }
+    function up() {
+      window.removeEventListener("pointermove", move);
+      if (mode === "move" && dropTrack && dropTrack !== c.track) {
+        var tt = trackById(dropTrack);     // only move between same-kind lanes
+        if (tt && tt.kind === c.kind) c.track = dropTrack;
+      }
+      mode = null; dropTrack = null; renderAll(); commit(); endInteract();
+    }
     el.addEventListener("pointerdown", function (e) { down(e, "move"); });
     hl.addEventListener("pointerdown", function (e) { down(e, "l"); });
     hr.addEventListener("pointerdown", function (e) { down(e, "r"); });
@@ -300,6 +332,11 @@
     else if (k === "s") { e.preventDefault(); clickGr("r2r-split"); }
     else if (k === "delete" || k === "backspace") { e.preventDefault(); clickGr("r2r-ripple"); }
     else if (k === "f") { e.preventDefault(); fit(); }
+    else if (k === "l") { e.preventDefault(); play(); }
+    else if (k === "k") { e.preventDefault(); stop(); commit(); }
+    else if (k === "j") { e.preventDefault(); stop(); setPlayhead(ph() - 1); commit(); }
+    else if (k === "arrowleft") { e.preventDefault(); setPlayhead(ph() - 1 / (S.edit.fps || 30)); commit(); }
+    else if (k === "arrowright") { e.preventDefault(); setPlayhead(ph() + 1 / (S.edit.fps || 30)); commit(); }
     else if ((e.ctrlKey || e.metaKey) && k === "z" && !e.shiftKey) { e.preventDefault(); clickGr("r2r-undo"); }
     else if ((e.ctrlKey || e.metaKey) && (k === "y" || (k === "z" && e.shiftKey))) { e.preventDefault(); clickGr("r2r-redo"); }
   }

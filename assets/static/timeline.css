@@ -90,6 +90,21 @@
   background: #ff3b3b; pointer-events: none; z-index: 4;
 }
 
+/* text / title clips */
+.r2r-tl .r2r-clip.r2r-text {
+  background: #5b3fb0; border-color: #3f2a80;
+  background-image: none !important;
+}
+.r2r-tl .r2r-clip.r2r-text .r2r-label { color: #fff; text-shadow: 0 1px 2px #000; }
+
+/* ruler markers (downward flag) */
+.r2r-tl .r2r-marker {
+  position: absolute; top: 0; width: 0; height: 0; z-index: 3; cursor: help;
+  border-left: 5px solid transparent; border-right: 5px solid transparent;
+  border-top: 9px solid #e0a106;
+  transform: translateX(-5px);
+}
+
 /* fades, opacity, transitions, mute */
 .r2r-tl .r2r-fade {
   position: absolute; top: 0; height: 100%; pointer-events: none; z-index: 2;

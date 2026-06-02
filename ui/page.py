@@ -75,20 +75,38 @@ def _timeline() -> dict:
         c["undo"] = gr.Button("↶ Undo", scale=0, elem_id="r2r-undo")
         c["redo"] = gr.Button("↷ Redo", scale=0, elem_id="r2r-redo")
         c["split"] = gr.Button("✂ Split", scale=0, elem_id="r2r-split")
+        c["add_title"] = gr.Button("🆃 Title", scale=0)
+        c["add_marker"] = gr.Button("🚩 Marker", scale=0)
         c["add_video"] = gr.Button("➕ Video track", scale=0)
         c["add_audio"] = gr.Button("➕ Audio track", scale=0)
     widget = timeline_widget.build_timeline_widget()
     c.update(widget)                   # mount, tl_to_py, tl_from_py
 
     with gr.Accordion("Selected clip", open=True):
-        c["ins_label"] = gr.Textbox(label="Label")
+        c["ins_label"] = gr.Textbox(label="Label / title text")
         with gr.Row():
             c["ins_gain"] = gr.Slider(-40, 12, value=0, step=0.5, label="Gain (dB)")
-            c["ins_opacity"] = gr.Slider(0, 1, value=1, step=0.05, label="Opacity (overlay)")
+            c["ins_speed"] = gr.Slider(0.1, 8, value=1, step=0.05, label="Speed")
+            c["ins_reverse"] = gr.Checkbox(label="Reverse")
         with gr.Row():
             c["ins_fade_in"] = gr.Slider(0, 5, value=0, step=0.05, label="Fade in (s)")
             c["ins_fade_out"] = gr.Slider(0, 5, value=0, step=0.05, label="Fade out (s)")
+            c["ins_opacity"] = gr.Slider(0, 1, value=1, step=0.05, label="Opacity")
         c["ins_mute"] = gr.Checkbox(label="Mute this clip's audio")
+        with gr.Accordion("Color", open=False):
+            with gr.Row():
+                c["ins_bright"] = gr.Slider(-1, 1, value=0, step=0.02, label="Brightness")
+                c["ins_contrast"] = gr.Slider(0, 2, value=1, step=0.02, label="Contrast")
+            with gr.Row():
+                c["ins_sat"] = gr.Slider(0, 3, value=1, step=0.02, label="Saturation")
+                c["ins_gamma"] = gr.Slider(0.1, 3, value=1, step=0.02, label="Gamma")
+        with gr.Accordion("Transform (position / scale)", open=False):
+            with gr.Row():
+                c["ins_tx"] = gr.Textbox(label="X (px or center)", value="center")
+                c["ins_ty"] = gr.Textbox(label="Y (px or center)", value="center")
+            with gr.Row():
+                c["ins_scale"] = gr.Slider(0.05, 4, value=1, step=0.05, label="Scale")
+                c["ins_rotate"] = gr.Slider(-180, 180, value=0, step=1, label="Rotate °")
         c["ins_apply"] = gr.Button("Apply to selected clip", variant="primary",
                                    elem_classes="reel2reel-prim")
         with gr.Row():
@@ -97,8 +115,14 @@ def _timeline() -> dict:
             c["ins_ripple"] = gr.Button("⇤ Ripple delete", elem_id="r2r-ripple")
             c["ins_delete"] = gr.Button("🗑 Delete (lift)")
         with gr.Row():
-            c["trans_dur"] = gr.Slider(0.1, 3, value=0.5, step=0.1, label="Dissolve (s)")
-            c["trans_add"] = gr.Button("⇆ Add dissolve → next")
+            c["trans_kind"] = gr.Dropdown(
+                ["dissolve", "fade_black", "fade_white", "wipe", "slide"],
+                value="dissolve", label="Transition", scale=1)
+            c["trans_dir"] = gr.Dropdown(["left", "right", "up", "down"], value="left",
+                                        label="Direction", scale=1)
+            c["trans_dur"] = gr.Slider(0.1, 3, value=0.5, step=0.1, label="Duration", scale=1)
+        with gr.Row():
+            c["trans_add"] = gr.Button("⇆ Add transition → next")
             c["trans_rm"] = gr.Button("Remove transition")
 
     with gr.Accordion("Tracks", open=False):

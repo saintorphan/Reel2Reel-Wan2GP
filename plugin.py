@@ -611,8 +611,10 @@ class Reel2Reel(WAN2GPPlugin):
 
     # -- timeline: bridge persist + inspectors + toolbar --------------------
     def _wire_timeline(self, c):
-        ins = [c["ins_label"], c["ins_gain"], c["ins_fade_in"], c["ins_fade_out"],
-               c["ins_opacity"], c["ins_mute"]]
+        ins = [c["ins_label"], c["ins_gain"], c["ins_speed"], c["ins_reverse"],
+               c["ins_fade_in"], c["ins_fade_out"], c["ins_opacity"], c["ins_mute"],
+               c["ins_bright"], c["ins_contrast"], c["ins_sat"], c["ins_gamma"],
+               c["ins_tx"], c["ins_ty"], c["ins_scale"], c["ins_rotate"]]
         # Browser -> Python: persist edits + auto-populate the clip inspector.
         c["tl_to_py"].change(self._on_timeline_change, inputs=[c["tl_to_py"]],
                             outputs=ins, show_progress="hidden")
@@ -624,11 +626,15 @@ class Reel2Reel(WAN2GPPlugin):
         c["ins_dup"].click(self._duplicate, outputs=[self.tl_from_py, c["status"]])
         c["ins_ripple"].click(self._ripple_delete, outputs=[self.tl_from_py, c["status"]])
         c["ins_delete"].click(self._lift_delete, outputs=[self.tl_from_py, c["status"]])
-        c["trans_add"].click(self._add_transition, inputs=[c["trans_dur"]],
+        c["trans_add"].click(self._add_transition,
+                            inputs=[c["trans_dur"], c["trans_kind"], c["trans_dir"]],
                             outputs=[self.tl_from_py, c["status"]])
         c["trans_rm"].click(self._remove_transition, outputs=[self.tl_from_py, c["status"]])
 
         c["split"].click(self._split, outputs=[self.tl_from_py, c["status"]])
+        c["add_title"].click(self._add_title,
+                            outputs=[self.tl_from_py, self.trk_dd, c["status"]])
+        c["add_marker"].click(self._add_marker, outputs=[self.tl_from_py, c["status"]])
         c["add_video"].click(lambda: self._add_track("Video"),
                             outputs=[self.tl_from_py, self.trk_dd, c["status"]])
         c["add_audio"].click(lambda: self._add_track("Audio"),
@@ -705,20 +711,70 @@ class Reel2Reel(WAN2GPPlugin):
     def _inspector_values(self):
         _, clip = self._sel()
         if clip is None:
-            return [gr.update()] * 6
-        return [gr.update(value=clip.label), gr.update(value=clip.gain_db),
+            return [gr.update()] * 16
+        col = clip.color or {}
+        g = clip.geometry or {}
+        label = (clip.text.get("content") if clip.type == "text" and clip.text
+                 else clip.label)
+        return [gr.update(value=label), gr.update(value=clip.gain_db),
+                gr.update(value=clip.speed), gr.update(value=clip.reverse),
                 gr.update(value=clip.fade_in), gr.update(value=clip.fade_out),
-                gr.update(value=clip.opacity), gr.update(value=clip.mute)]
+                gr.update(value=clip.opacity), gr.update(value=clip.mute),
+                gr.update(value=col.get("brightness", 0.0)),
+                gr.update(value=col.get("contrast", 1.0)),
+                gr.update(value=col.get("saturation", 1.0)),
+                gr.update(value=col.get("gamma", 1.0)),
+                gr.update(value=str(g.get("x", "center"))),
+                gr.update(value=str(g.get("y", "center"))),
+                gr.update(value=g.get("scale", 1.0)),
+                gr.update(value=g.get("rotate", 0.0))]
+
+    @staticmethod
+    def _coord(v):
+        v = str(v).strip().lower()
+        if v in ("", "center"):
+            return "center"
+        try:
+            return int(float(v))
+        except ValueError:
+            return "center"
 
     # -- clip ops -----------------------------------------------------------
-    def _apply_clip(self, label, gain, fin, fout, opacity, mute):
+    def _apply_clip(self, label, gain, speed, reverse, fin, fout, opacity, mute,
+                    bright, contrast, sat, gamma, tx, ty, scale, rotate):
         _, clip = self._sel()
         if clip is None:
             raise gr.Error("Select a clip on the timeline first.")
         self._push_undo()
-        self._project.set_clip(clip.id, label=label, gain_db=gain, fade_in=fin,
-                               fade_out=fout, opacity=opacity, mute=mute)
+        color = {"brightness": float(bright), "contrast": float(contrast),
+                 "saturation": float(sat), "gamma": float(gamma)}
+        geometry = {"x": self._coord(tx), "y": self._coord(ty),
+                    "scale": float(scale), "rotate": float(rotate)}
+        props = dict(label=label, gain_db=gain, speed=speed, reverse=reverse,
+                     fade_in=fin, fade_out=fout, opacity=opacity, mute=mute,
+                     color=color, geometry=geometry)
+        if clip.type == "text":
+            txt = dict(clip.text or {})
+            txt["content"] = label
+            props["text"] = txt
+        self._project.set_clip(clip.id, **props)
         return self._env_after(), f"Updated **{clip.label or clip.id}**."
+
+    def _add_title(self):
+        ph = float((self._project.ui or {}).get("playhead", 0.0))
+        self._push_undo()
+        track, sel = self._sel()
+        tid = track.id if (track and track.kind == "Video") else None
+        clip = self._project.add_text_clip("Title", start=ph, dur=3.0, track_id=tid)
+        self._project.ui["selected"] = clip.id
+        return (self._env_after(), gr.update(choices=self._track_choices()),
+                "Added a title — edit its text in the inspector.")
+
+    def _add_marker(self):
+        ph = float((self._project.ui or {}).get("playhead", 0.0))
+        self._push_undo()
+        self._project.add_marker(ph, label="")
+        return self._env_after(), f"Marker added at {ph:.2f}s."
 
     def _detach_audio(self):
         track, clip = self._sel()
@@ -769,15 +825,16 @@ class Reel2Reel(WAN2GPPlugin):
         self._project.ui["selected"] = None
         return self._env_after(), "Deleted clip (gap left)."
 
-    def _add_transition(self, dur):
+    def _add_transition(self, dur, kind, direction):
         track, clip = self._sel()
         if clip is None:
             raise gr.Error("Select the left clip of the pair first.")
         self._push_undo()
-        tid = self._project.add_transition(clip.id, float(dur))
+        tid = self._project.add_transition(clip.id, float(dur), kind=kind or "dissolve",
+                                           direction=direction or "left")
         if not tid:
-            return self._load_envelope(), "No clip follows the selection on its track."
-        return self._env_after(), f"Added a {dur:g}s dissolve into the next clip."
+            return self._load_envelope(), "No clip follows the selection (or clips too short)."
+        return self._env_after(), f"Added a {float(dur):g}s {kind or 'dissolve'} → next clip."
 
     def _remove_transition(self):
         _, clip = self._sel()
