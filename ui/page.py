@@ -99,10 +99,20 @@ def _timeline() -> dict:
                     c["ins_speed"] = gr.Slider(0.1, 8, value=1, step=0.05, label="Speed")
                     c["ins_reverse"] = gr.Checkbox(label="Reverse")
                 with gr.Accordion("Color", open=False):
+                    c["ins_auto"] = gr.Button("✨ Auto-Enhance", size="sm")
                     c["ins_bright"] = gr.Slider(-1, 1, value=0, step=0.02, label="Brightness")
                     c["ins_contrast"] = gr.Slider(0, 2, value=1, step=0.02, label="Contrast")
                     c["ins_sat"] = gr.Slider(0, 3, value=1, step=0.02, label="Saturation")
                     c["ins_gamma"] = gr.Slider(0.1, 3, value=1, step=0.02, label="Gamma")
+                    with gr.Row():
+                        c["ins_temp"] = gr.Slider(-1, 1, value=0, step=0.02,
+                                                 label="Temp (cool↔warm)")
+                        c["ins_tint"] = gr.Slider(-1, 1, value=0, step=0.02,
+                                                 label="Tint (green↔magenta)")
+                    with gr.Row():
+                        c["ins_match_ref"] = gr.Dropdown(choices=[], label="Match color to…",
+                                                        scale=2)
+                        c["ins_match"] = gr.Button("🎯 Match", scale=1)
                 with gr.Accordion("Transform / crop", open=False):
                     with gr.Row():
                         c["ins_tx"] = gr.Textbox(label="X (px/center)", value="center")

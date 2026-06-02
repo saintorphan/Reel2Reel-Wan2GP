@@ -14,16 +14,30 @@ def _esc_drawtext(s: str) -> str:
 
 
 def color_vf(color: dict | None) -> str:
-    """An eq filter from {brightness,contrast,saturation,gamma}; "" if neutral."""
+    """eq (+ a white-balance channel mixer) from the clip color dict; "" if neutral.
+
+    Keys: brightness -1..1, contrast 0..2, saturation 0..3, gamma 0.1..3,
+    temp -1..1 (cool→warm), tint -1..1 (green→magenta). The mixer is a hue-only
+    per-channel gain — what Auto-Enhance / Color-match write for white balance.
+    Returns a comma-joined fragment (render.normalize_video re-joins it), "" = no-op.
+    """
     if not isinstance(color, dict):
         return ""
     b = float(color.get("brightness", 0.0) or 0.0)     # -1..1
     c = float(color.get("contrast", 1.0) or 1.0)       # 0..2
     s = float(color.get("saturation", 1.0) or 1.0)     # 0..3
     g = float(color.get("gamma", 1.0) or 1.0)          # 0.1..3
-    if abs(b) < 1e-3 and abs(c - 1) < 1e-3 and abs(s - 1) < 1e-3 and abs(g - 1) < 1e-3:
-        return ""
-    return f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}:gamma={g:.3f}"
+    temp = float(color.get("temp", 0.0) or 0.0)        # -1..1
+    tint = float(color.get("tint", 0.0) or 0.0)        # -1..1
+    parts = []
+    if not (abs(b) < 1e-3 and abs(c - 1) < 1e-3 and abs(s - 1) < 1e-3 and abs(g - 1) < 1e-3):
+        parts.append(f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}:gamma={g:.3f}")
+    if abs(temp) > 1e-3 or abs(tint) > 1e-3:
+        rr = 1.0 + 0.25 * temp        # warm: lift red, drop blue
+        bb = 1.0 - 0.25 * temp
+        gg = 1.0 - 0.15 * tint        # +tint = magenta (less green)
+        parts.append(f"colorchannelmixer=rr={rr:.3f}:gg={gg:.3f}:bb={bb:.3f}")
+    return ",".join(parts)
 
 
 def speed_vf(speed: float, reverse: bool) -> str:

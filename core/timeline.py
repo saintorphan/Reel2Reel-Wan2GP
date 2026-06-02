@@ -69,7 +69,7 @@ class Clip:
     has_audio: bool = False
     speed: float = 1.0             # playback speed (>0); reverse is separate
     reverse: bool = False
-    color: Optional[dict] = None   # {brightness, contrast, saturation, gamma}
+    color: Optional[dict] = None   # {brightness, contrast, saturation, gamma, temp, tint}
     geometry: Optional[dict] = None  # {x, y, scale, rotate, crop:{l,t,r,b}}
     text: Optional[dict] = None    # {content, size, color, box, box_color, x, y, font}
     keyframes: Optional[dict] = None  # {prop: [[t, v], ...]} t relative to clip start

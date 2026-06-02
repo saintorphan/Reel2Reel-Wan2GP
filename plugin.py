@@ -700,16 +700,24 @@ class Reel2Reel(WAN2GPPlugin):
         ins = [c["ins_label"], c["ins_gain"], c["ins_speed"], c["ins_reverse"],
                c["ins_fade_in"], c["ins_fade_out"], c["ins_opacity"], c["ins_mute"],
                c["ins_bright"], c["ins_contrast"], c["ins_sat"], c["ins_gamma"],
+               c["ins_temp"], c["ins_tint"],
                c["ins_tx"], c["ins_ty"], c["ins_scale"], c["ins_rotate"],
                c["ins_fit"], c["ins_crop"]]
-        # Selection also drives the clip preview + info (extra outputs, not inputs).
-        ins_out = ins + [c["clip_preview"], c["clip_info"]]
+        # Selection also drives the preview, info + the Match-to clip list (outputs only).
+        ins_out = ins + [c["clip_preview"], c["clip_info"], c["ins_match_ref"]]
         # Browser -> Python: persist edits + auto-populate the clip inspector.
         c["tl_to_py"].change(self._on_timeline_change, inputs=[c["tl_to_py"]],
                             outputs=ins_out, show_progress="hidden")
 
         c["ins_apply"].click(self._apply_clip, inputs=ins,
                             outputs=[self.tl_from_py, c["status"]])
+        # Auto-Enhance / Color-match fill the colour sliders (review, then Apply).
+        c["ins_auto"].click(self._auto_enhance,
+                           outputs=[c["ins_bright"], c["ins_contrast"], c["ins_sat"],
+                                    c["ins_gamma"], c["status"]])
+        c["ins_match"].click(self._color_match, inputs=[c["ins_match_ref"]],
+                            outputs=[c["ins_bright"], c["ins_contrast"], c["ins_sat"],
+                                     c["ins_temp"], c["ins_tint"], c["status"]])
         c["ins_detach"].click(self._detach_audio,
                             outputs=[self.tl_from_py, self.trk_dd, c["status"]])
         c["ins_dup"].click(self._duplicate, outputs=[self.tl_from_py, c["status"]])
@@ -825,9 +833,10 @@ class Reel2Reel(WAN2GPPlugin):
     def _inspector_values(self):
         _, clip = self._sel()
         if clip is None:
-            return ([gr.update()] * 18
+            return ([gr.update()] * 20
                     + [gr.update(value=None),
-                       gr.update(value="*Double-click a clip to inspect it.*")])
+                       gr.update(value="*Double-click a clip to inspect it.*"),
+                       gr.update(choices=self._clip_choices())])
         col = clip.color or {}
         g = clip.geometry or {}
         label = (clip.text.get("content") if clip.type == "text" and clip.text
@@ -842,6 +851,8 @@ class Reel2Reel(WAN2GPPlugin):
                 gr.update(value=col.get("contrast", 1.0)),
                 gr.update(value=col.get("saturation", 1.0)),
                 gr.update(value=col.get("gamma", 1.0)),
+                gr.update(value=col.get("temp", 0.0)),
+                gr.update(value=col.get("tint", 0.0)),
                 gr.update(value=str(g.get("x", "center"))),
                 gr.update(value=str(g.get("y", "center"))),
                 gr.update(value=g.get("scale", 1.0)),
@@ -849,7 +860,8 @@ class Reel2Reel(WAN2GPPlugin):
                 gr.update(value=g.get("fit", "fit")),
                 gr.update(value=g.get("crop", 0.0)),
                 gr.update(value=preview),
-                gr.update(value=self._clip_info_md(clip))]
+                gr.update(value=self._clip_info_md(clip)),
+                gr.update(choices=self._clip_choices(exclude=clip.id))]
 
     @staticmethod
     def _coord(v):
@@ -863,13 +875,15 @@ class Reel2Reel(WAN2GPPlugin):
 
     # -- clip ops -----------------------------------------------------------
     def _apply_clip(self, label, gain, speed, reverse, fin, fout, opacity, mute,
-                    bright, contrast, sat, gamma, tx, ty, scale, rotate, fit, crop):
+                    bright, contrast, sat, gamma, temp, tint,
+                    tx, ty, scale, rotate, fit, crop):
         _, clip = self._sel()
         if clip is None:
             raise gr.Error("Select a clip on the timeline first.")
         self._push_undo()
         color = {"brightness": float(bright), "contrast": float(contrast),
-                 "saturation": float(sat), "gamma": float(gamma)}
+                 "saturation": float(sat), "gamma": float(gamma),
+                 "temp": float(temp), "tint": float(tint)}
         geometry = {"x": self._coord(tx), "y": self._coord(ty),
                     "scale": float(scale), "rotate": float(rotate),
                     "fit": fit or "fit", "crop": float(crop)}
@@ -882,6 +896,82 @@ class Reel2Reel(WAN2GPPlugin):
             props["text"] = txt
         self._project.set_clip(clip.id, **props)
         return self._env_after(), f"Updated **{clip.label or clip.id}**."
+
+    # -- colour: auto-enhance + clip-to-clip match --------------------------
+    # Both only fill the inspector's colour sliders (brightness/contrast/sat/gamma,
+    # +temp/tint for match) — the user reviews and hits Apply, reusing _apply_clip.
+    _AUTO_PRESET = (0.0, 1.12, 1.15, 0.96)   # brightness, contrast, saturation, gamma
+
+    @staticmethod
+    def _clamp(v, lo, hi):
+        return max(lo, min(hi, float(v)))
+
+    def _clip_choices(self, exclude=None):
+        """(label, id) for every video clip — populates the Match-color-to dropdown."""
+        out = []
+        for t in self._project.tracks:
+            for cl in t.clips:
+                if cl.id == exclude or cl.type == "text" or not cl.src:
+                    continue
+                if discovery.kind_of(cl.src) != "video":
+                    continue
+                out.append((f"{cl.label or cl.id} · {t.name}", cl.id))
+        return out
+
+    @staticmethod
+    def _mid(clip) -> float:
+        return float(clip.in_) + clip.src_len / 2.0
+
+    def _auto_enhance(self):
+        _, clip = self._sel()
+        if clip is None:
+            raise gr.Error("Select a clip on the timeline first.")
+        if not clip.src or discovery.kind_of(clip.src) != "video":
+            raise gr.Error("Auto-Enhance works on video clips.")
+        st = render.frame_stats(clip.src, self._mid(clip))
+        if not st:
+            b, c, s, g = self._AUTO_PRESET
+            msg = "✨ Auto-Enhance: couldn't read the frame — applied a default pop preset. Review and **Apply**."
+        else:
+            b = self._clamp((128.0 - st["ymean"]) / 255.0 * 0.8, -0.25, 0.25)
+            c = self._clamp(55.0 / max(1.0, st["ystd"]), 1.0, 1.4)
+            s = self._clamp(1.0 + (0.35 - st["sat"]) * 0.9, 1.0, 1.4) if st["sat"] < 0.35 else 1.0
+            g = 1.0
+            msg = (f"✨ Auto-Enhance: brightness {b:+.2f}, contrast {c:.2f}, "
+                   f"saturation {s:.2f} — review and **Apply**.")
+        return (gr.update(value=round(b, 3)), gr.update(value=round(c, 3)),
+                gr.update(value=round(s, 3)), gr.update(value=round(g, 3)), msg)
+
+    def _color_match(self, ref_id):
+        _, clip = self._sel()
+        if clip is None:
+            raise gr.Error("Select the clip you want to grade first.")
+        if not ref_id:
+            raise gr.Error("Pick a reference clip in “Match color to…”.")
+        _, ref = self._project.find_clip(ref_id)
+        if ref is None:
+            raise gr.Error("Reference clip not found — it may have been removed.")
+        if not (clip.src and ref.src):
+            raise gr.Error("Both clips need a video source to match colour.")
+        ts = render.frame_stats(clip.src, self._mid(clip))
+        rs = render.frame_stats(ref.src, self._mid(ref))
+        if not ts or not rs:
+            raise gr.Error("Couldn't analyse one of the frames (ffmpeg/frame unavailable).")
+        b = self._clamp((rs["ymean"] - ts["ymean"]) / 255.0, -0.4, 0.4)
+        c = self._clamp(rs["ystd"] / max(1.0, ts["ystd"]), 0.6, 1.8)
+        s = self._clamp(rs["sat"] / max(0.02, ts["sat"]), 0.4, 2.0)
+        # White balance: per-channel gain, made hue-only by dividing out the luma (geomean).
+        gr_, gg, gb = (rs["r"] / max(1.0, ts["r"]), rs["g"] / max(1.0, ts["g"]),
+                       rs["b"] / max(1.0, ts["b"]))
+        k = (gr_ * gg * gb) ** (1.0 / 3.0) or 1.0
+        gr_, gg, gb = gr_ / k, gg / k, gb / k
+        temp = self._clamp((gr_ - gb) / 0.5, -1.0, 1.0)     # inverse of color_vf's mixer
+        tint = self._clamp((1.0 - gg) / 0.15, -1.0, 1.0)
+        msg = (f"🎯 Matched to **{ref.label or ref.id}**: bright {b:+.2f}, contrast {c:.2f}, "
+               f"sat {s:.2f}, temp {temp:+.2f}, tint {tint:+.2f} — review and **Apply**.")
+        return (gr.update(value=round(b, 3)), gr.update(value=round(c, 3)),
+                gr.update(value=round(s, 3)), gr.update(value=round(temp, 3)),
+                gr.update(value=round(tint, 3)), msg)
 
     def _add_title(self):
         ph = float((self._project.ui or {}).get("playhead", 0.0))

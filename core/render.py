@@ -542,6 +542,44 @@ def filmstrip(src, in_, out, dest, n=6, fh=48) -> str | None:
         return None
 
 
+def frame_stats(src, t, n=24) -> dict | None:
+    """Cheap per-frame color stats for Auto-Enhance / Color-match.
+
+    Decodes ONE frame at time ``t`` area-averaged down to n×n rgb24 and sums it in
+    pure Python — no metadata parsing, no version-specific filter behavior. Returns
+    mean r/g/b (0-255), luma mean/std, and an HSV-ish mean saturation (0-1); ``None``
+    if ffmpeg is missing or the decode produced too few bytes.
+    """
+    exe = ffmpeg_path()
+    if not exe:
+        return None
+    try:
+        proc = subprocess.run(
+            [exe, "-v", "error", "-ss", f"{max(0.0, float(t)):.3f}", "-i", src,
+             "-frames:v", "1", "-vf", f"scale={n}:{n}:flags=area,format=rgb24",
+             "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+            capture_output=True, timeout=60)
+        buf = proc.stdout or b""
+        px = len(buf) // 3
+        if px < n * n:
+            return None
+        sr = sg = sb = 0
+        sat = 0.0
+        ys = []
+        for i in range(px):
+            r, g, b = buf[3 * i], buf[3 * i + 1], buf[3 * i + 2]
+            sr += r; sg += g; sb += b
+            ys.append(0.299 * r + 0.587 * g + 0.114 * b)
+            mx, mn = max(r, g, b), min(r, g, b)
+            sat += (mx - mn) / mx if mx else 0.0
+        ymean = sum(ys) / px
+        ystd = (sum((y - ymean) ** 2 for y in ys) / px) ** 0.5
+        return {"r": sr / px, "g": sg / px, "b": sb / px,
+                "ymean": ymean, "ystd": ystd, "sat": sat / px}
+    except Exception:
+        return None
+
+
 def extract_frame(src, t, dest) -> str | None:
     exe = ffmpeg_path()
     if not exe:
