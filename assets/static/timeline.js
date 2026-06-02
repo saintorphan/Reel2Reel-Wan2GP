@@ -157,9 +157,9 @@
     if (!clips().length) {
       var hint = document.createElement("div");
       hint.className = "r2r-empty";
-      hint.innerHTML = "Empty timeline — add clips from the <b>Library</b> tab, or "
-        + "right-click any output / clip → <b>Reel2Reel Library</b>, then add to a "
-        + "track. Double-click a clip to inspect it · press <b>?</b> for shortcuts.";
+      hint.innerHTML = "Empty timeline — add clips from the <b>Library</b> panel on the "
+        + "left (press <b>B</b> to toggle it), or right-click any output / clip → "
+        + "<b>Reel2Reel Library</b>. Double-click a clip to inspect it · <b>?</b> for shortcuts.";
       S.lanes.appendChild(hint);
     }
     var w = Math.max(600, sec2px(totalDur()) + 200);
@@ -567,6 +567,7 @@
       + "<li>Drag a clip <b>edge</b> to trim · drag to another lane to change track</li>"
       + "<li><b>F</b> fit · <b>Shift-Z</b> zoom to selection · <b>Ctrl/⌘-Z</b> undo · <b>Ctrl/⌘-Shift-Z</b> redo</li>"
       + "<li>Click the time readout to jump · <b>right-click a clip</b> for actions + the saintorphan menu</li>"
+      + "<li><b>B</b> library panel · <b>I</b> clip inspector · <b>right-click a track head</b> to rename / delete / reorder</li>"
       + "</ul><button class='r2r-help-close'>Close</button></div>";
     m.addEventListener("click", function (e) {
       if (e.target === m || (e.target.className || "").indexOf("r2r-help-close") >= 0) m.remove();
@@ -616,6 +617,25 @@
       s.appendChild(h);
     }
   }
+  // left-docked Library rail — mirror of the inspector chrome above
+  function openLibrary() { var s = stageEl(); if (s) s.classList.remove("r2r-lib-collapsed"); }
+  function closeLibrary() { var s = stageEl(); if (s) s.classList.add("r2r-lib-collapsed"); }
+  function ensureLibChrome() {
+    var s = stageEl(); if (!s) return;
+    if (!s.querySelector("#r2r-lib-close")) {
+      var b = document.createElement("button");
+      b.id = "r2r-lib-close"; b.type = "button"; b.title = "Hide library"; b.textContent = "«";
+      b.addEventListener("click", closeLibrary);
+      s.appendChild(b);
+    }
+    if (!s.querySelector("#r2r-lib-reveal")) {
+      var h = document.createElement("div");
+      h.id = "r2r-lib-reveal"; h.title = "Show library"; h.textContent = "Library ▶";
+      h.addEventListener("click", openLibrary);
+      s.appendChild(h);
+    }
+  }
+  function ensureChrome() { ensureInsChrome(); ensureLibChrome(); }
   function syncSnapBox() {
     var b = S.root && S.root.querySelector('[data-act="snap"]');
     if (b) b.classList.toggle("active", S.snap);
@@ -666,6 +686,11 @@
       e.preventDefault();
       var s = stageEl();
       if (s) (s.classList.contains("r2r-ins-collapsed") ? openInspector : closeInspector)();
+    }
+    else if (k === "b" && !(e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      var sb = stageEl();
+      if (sb) (sb.classList.contains("r2r-lib-collapsed") ? openLibrary : closeLibrary)();
     }
   }
 
@@ -788,13 +813,13 @@
         if (!isNaN(t)) { stop(); setPlayhead(Math.max(0, t)); commit(); }
       });
     }
-    ensureInsChrome();
+    ensureChrome();
     S.mounted = true; renderAll(); syncSnapBox();
   }
   function tryMount() {
     var root = document.getElementById(ROOT_ID);
     if (root && (!root.querySelector(".r2r-tl") || !S.mounted)) buildSkeleton(root);
-    ensureInsChrome();   // idempotent: re-attach >>/reveal chrome on #r2r-stage after re-mounts
+    ensureChrome();   // idempotent: re-attach reveal/close chrome on #r2r-stage after re-mounts
   }
   function boot() {
     tryMount();

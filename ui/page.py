@@ -13,14 +13,15 @@ import gradio as gr
 
 from . import timeline_widget
 
-MODES = ("timeline", "library", "render")
+MODES = ("timeline", "render")   # 'library' is now a collapsible rail inside the editor
 
 
 def _library() -> dict:
     c = {"mode": "library"}
 
     def _bin(label):
-        return gr.Gallery(columns=5, height=300, object_fit="cover", preview=False,
+        # narrow now — the library is a left rail, not a full page
+        return gr.Gallery(columns=2, height=260, object_fit="cover", preview=False,
                           allow_preview=False, show_label=False,
                           elem_classes="reel2reel-gallery", label=label)
 
@@ -56,12 +57,12 @@ def _library() -> dict:
     return c
 
 
-def _timeline() -> dict:
+def build_editor() -> tuple[dict, dict]:
+    """The single editing surface, returned as (timeline_dict, library_dict):
+    collapsible Library rail (left) · timeline canvas (center) · collapsible clip
+    inspector (right). The two dicts stay separate so the existing _wire_timeline /
+    _wire_library keep operating on their own keys — no plugin wiring changes."""
     c = {"mode": "timeline"}
-    gr.Markdown("### Timeline\n"
-                "Drag to move, drag an edge to trim, click the ruler to scrub, "
-                "**Space** to play, **R** razor. **Double-click a clip** to open it "
-                "in the inspector on the right (**?** for all shortcuts).")
     # Host-action buttons: demoted to a CSS-hidden Row (#r2r-host-tools). They stay
     # in the DOM so the in-canvas toolbar + keyboard shortcuts can fire them by
     # elem_id via the clickGr('#id button') bridge — visible=False would drop them.
@@ -78,12 +79,14 @@ def _timeline() -> dict:
         # because many handlers refresh their track-choices into it.
         c["trk_dd"] = gr.Dropdown(label="Track", choices=[])
 
-    # #r2r-stage is the STABLE host for the collapse state + injected >>/reveal chrome
-    # (Gradio re-renders the inspector's children on every tl_to_py.change, so chrome
-    # must live on the stage wrapper, not inside the inspector). Default-collapsed:
-    # the inspector hides and the scale=3 canvas flex-grows to the full row width.
+    # #r2r-stage is the STABLE host for the collapse state + injected reveal/close chrome
+    # (Gradio re-renders the rails' children on every tl_to_py.change, so chrome must live
+    # on the stage wrapper, not inside a rail). Default classes: library rail OPEN, clip
+    # inspector COLLAPSED — a collapsed rail (display:none) lets the canvas flex-grow.
     with gr.Column(elem_id="r2r-stage", elem_classes="r2r-ins-collapsed"):
         with gr.Row():
+            with gr.Column(scale=1, elem_id="reel2reel-librail"):     # the library bins
+                lib = _library()
             with gr.Column(scale=3):                       # the timeline canvas
                 widget = timeline_widget.build_timeline_widget()
                 c.update(widget)                           # mount, tl_to_py, tl_from_py
@@ -149,7 +152,7 @@ def _timeline() -> dict:
     # Project / version CRUD lives in the persistent suite-level bar (above the
     # sub-tabs, visible on every page) — see ui/suite.py _projbar().
     c["status"] = gr.Markdown("")
-    return c
+    return c, lib
 
 
 def _render() -> dict:
@@ -195,5 +198,7 @@ def _render() -> dict:
 
 
 def build_page(mode: str) -> dict:
-    assert mode in MODES, mode
-    return {"library": _library, "timeline": _timeline, "render": _render}[mode]()
+    """Standalone per-tab pages. Only Render now — the editor (timeline + library
+    rail + inspector) is built together by build_editor()."""
+    assert mode == "render", mode
+    return _render()

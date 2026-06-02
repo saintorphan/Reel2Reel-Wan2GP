@@ -60,9 +60,13 @@ def build_suite() -> dict:
     pages = {}
     bar = _projbar()
     with gr.Tabs() as subtabs:
-        for mode in page.MODES:
-            with gr.Tab(_LABELS[mode], id=_TAB_IDS[mode]):
-                pages[mode] = page.build_page(mode)
+        # The editor tab hosts the library (left rail) + timeline + inspector together;
+        # build_editor returns the two wiring dicts separately so plugin.py keeps using
+        # pages["timeline"] / pages["library"] exactly as before.
+        with gr.Tab(_LABELS["timeline"], id=_TAB_IDS["timeline"]):
+            pages["timeline"], pages["library"] = page.build_editor()
+        with gr.Tab(_LABELS["render"], id=_TAB_IDS["render"]):
+            pages["render"] = page.build_page("render")
         with gr.Tab("⚙ Settings", id=_TAB_IDS["settings"]):
             settings = build_settings_panel()
     return {"subtabs": subtabs, "tab_ids": _TAB_IDS, "pages": pages,
