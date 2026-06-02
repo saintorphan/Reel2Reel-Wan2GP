@@ -313,6 +313,12 @@
     el.addEventListener("pointerdown", function (e) { down(e, "move"); });
     hl.addEventListener("pointerdown", function (e) { down(e, "l"); });
     hr.addEventListener("pointerdown", function (e) { down(e, "r"); });
+    el.addEventListener("dblclick", function (e) {     // open in the inspector
+      e.preventDefault(); e.stopPropagation();
+      S.edit.ui = S.edit.ui || {};
+      S.edit.ui.selected = c.id; S.edit.ui.selection = [c.id];
+      highlight(); commit();
+    });
   }
   function clipById(id) {
     return clips().filter(function (c) { return c.id === id; })[0] || null;

@@ -696,9 +696,11 @@ class Reel2Reel(WAN2GPPlugin):
                c["ins_bright"], c["ins_contrast"], c["ins_sat"], c["ins_gamma"],
                c["ins_tx"], c["ins_ty"], c["ins_scale"], c["ins_rotate"],
                c["ins_fit"], c["ins_crop"]]
+        # Selection also drives the clip preview + info (extra outputs, not inputs).
+        ins_out = ins + [c["clip_preview"], c["clip_info"]]
         # Browser -> Python: persist edits + auto-populate the clip inspector.
         c["tl_to_py"].change(self._on_timeline_change, inputs=[c["tl_to_py"]],
-                            outputs=ins, show_progress="hidden")
+                            outputs=ins_out, show_progress="hidden")
 
         c["ins_apply"].click(self._apply_clip, inputs=ins,
                             outputs=[self.tl_from_py, c["status"]])
@@ -794,14 +796,32 @@ class Reel2Reel(WAN2GPPlugin):
     def _sel(self):
         return self._project.find_clip((self._project.ui or {}).get("selected"))
 
+    def _clip_info_md(self, clip) -> str:
+        info = f"**{clip.label or clip.id}** · {clip.type}  \n"
+        info += f"timeline {clip.start:.2f}–{clip.end:.2f}s  ·  {clip.dur:.2f}s long"
+        if clip.speed != 1.0 or clip.reverse:
+            info += f"  ·  {clip.speed:g}×{' rev' if clip.reverse else ''}"
+        if clip.src:
+            from pathlib import Path as _P
+            info += f"  \nsrc `{_P(clip.src).name}`"
+            if clip.src_dur:
+                info += f"  ·  source {clip.src_dur:.1f}s"
+            if clip.src_fps:
+                info += f"  ·  {clip.src_fps:g} fps"
+        return info
+
     def _inspector_values(self):
         _, clip = self._sel()
         if clip is None:
-            return [gr.update()] * 18
+            return ([gr.update()] * 18
+                    + [gr.update(value=None),
+                       gr.update(value="*Double-click a clip to inspect it.*")])
         col = clip.color or {}
         g = clip.geometry or {}
         label = (clip.text.get("content") if clip.type == "text" and clip.text
                  else clip.label)
+        kind = discovery.kind_of(clip.src) if clip.src else clip.type
+        preview = clip.src if kind == "video" else None
         return [gr.update(value=label), gr.update(value=clip.gain_db),
                 gr.update(value=clip.speed), gr.update(value=clip.reverse),
                 gr.update(value=clip.fade_in), gr.update(value=clip.fade_out),
@@ -815,7 +835,9 @@ class Reel2Reel(WAN2GPPlugin):
                 gr.update(value=g.get("scale", 1.0)),
                 gr.update(value=g.get("rotate", 0.0)),
                 gr.update(value=g.get("fit", "fit")),
-                gr.update(value=g.get("crop", 0.0))]
+                gr.update(value=g.get("crop", 0.0)),
+                gr.update(value=preview),
+                gr.update(value=self._clip_info_md(clip))]
 
     @staticmethod
     def _coord(v):

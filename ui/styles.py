@@ -16,6 +16,7 @@ button.reel2reel-tabbtn {{ border: 2px solid #2ea043 !important; border-radius: 
 
 #reel2reel-root .reel2reel-prim {{ background: {_ACCENT}; border-color: {_ACCENT_DK}; }}
 #reel2reel-root .reel2reel-gallery {{ min-height: 300px; }}
+#reel2reel-inspector {{ border-left: 2px solid {_ACCENT_DK}; padding-left: 10px; }}
 
 /* Small logo, tucked top-LEFT. Absolutely positioned; the sub-tab nav gets left
    padding so its buttons never slide under the logo. */
