@@ -122,18 +122,10 @@ _CTX_MENU_JS = (
     "M.register('.r2r-timeline-clip','Split at playhead',function(el){relay('csplit|'+rid(el));});"
     "M.register('.r2r-timeline-clip','Duplicate',function(el){relay('cdup|'+rid(el));});"
     "M.register('.r2r-timeline-clip','Detach audio',function(el){relay('cdetach|'+rid(el));});"
-    "M.register('.r2r-timeline-clip','Delete clip',function(el){relay('cdel|'+rid(el));});"
-    # Library thumbnails (.r2r-lib-thumb, decorated in timeline.js) carry data-bin +
-    # data-idx; our items resolve those server-side. The cross-plugin 'image'/'video'
-    # items (Replicant Reference, etc.) attach to the same <img> automatically.
-    "var lib=function(v){return function(el){var b=el.getAttribute('data-bin'),"
-    "i=el.getAttribute('data-idx');if(b!=null&&i!=null)relay(v+'|'+b+'|'+i);};};"
-    "M.register('.r2r-lib-thumb','➕ Add to timeline',lib('libadd'));"
-    "M.register('.r2r-lib-thumb','📦 Copy to project bin',lib('libpbin'));"
-    "M.register('.r2r-lib-thumb','🌐 Copy to global bin',lib('libgbin'));"
-    "M.register('.r2r-lib-thumb','✖ Remove from this bin',function(el){"
-    "var b=el.getAttribute('data-bin'),i=el.getAttribute('data-idx');"
-    "if((b==='pbin'||b==='gbin')&&i!=null)relay('librm|'+b+'|'+i);});}"
+    "M.register('.r2r-timeline-clip','Delete clip',function(el){relay('cdel|'+rid(el));});}"
+    # NB: library thumbnails deliberately do NOT register here — they get their own
+    # Reel2Reel-only menu (timeline.js openLibMenu), which suppresses this shared menu
+    # via a window-capture listener so the cross-plugin items don't show on bins.
     "})()\">")
 
 

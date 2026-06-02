@@ -645,11 +645,9 @@
       var bin = LIB_BINS[gid], items = g.querySelectorAll(".thumbnail-item");
       for (var i = 0; i < items.length; i++) {
         var it = items[i];
-        it.classList.add("r2r-lib-thumb");          // SaintorphanMenu surface
+        it.classList.add("r2r-lib-thumb");          // our menu + drag surface
         it.setAttribute("data-bin", bin);
         it.setAttribute("data-idx", i);             // display index → server path
-        var img = it.querySelector("img");
-        if (img) it.setAttribute("data-media-src", img.currentSrc || img.src || "");
         if (!it._r2rDrag) {
           it._r2rDrag = true;
           it.setAttribute("draggable", "true");
@@ -686,6 +684,36 @@
   function libTick() { decorateLib(); wireLibDrop(); }
   var _libT = null;
   function scheduleLibTick() { if (_libT) clearTimeout(_libT); _libT = setTimeout(libTick, 80); }
+  // Reel2Reel-only thumbnail menu (no cross-plugin items). Reuses the track-menu
+  // popup chrome (#r2r-trk-menu / closeTrackMenu); relays the same libadd/… verbs.
+  function openLibMenu(ev, th) {
+    ev.preventDefault(); closeTrackMenu();
+    var bin = th.getAttribute("data-bin"), idx = th.getAttribute("data-idx");
+    if (idx == null) return;
+    var items = [["➕ Add to timeline", "libadd"], ["📦 Copy to project bin", "libpbin"],
+                 ["🌐 Copy to global bin", "libgbin"]];
+    if (bin === "pbin" || bin === "gbin") items.push(["sep"], ["✖ Remove from this bin", "librm"]);
+    var menu = document.createElement("div");
+    menu.className = "r2r-trk-menu"; menu.id = "r2r-trk-menu";
+    items.forEach(function (it) {
+      if (it[0] === "sep") {
+        var s = document.createElement("div"); s.className = "r2r-trk-menu-sep";
+        menu.appendChild(s); return;
+      }
+      var b = document.createElement("button"); b.textContent = it[0];
+      b.addEventListener("click", function () { closeTrackMenu(); relayCtx(it[1] + "|" + bin + "|" + idx); });
+      menu.appendChild(b);
+    });
+    document.body.appendChild(menu);
+    var mw = menu.offsetWidth, mh = menu.offsetHeight;
+    menu.style.left = Math.min(ev.clientX, window.innerWidth - mw - 6) + "px";
+    menu.style.top = Math.min(ev.clientY, window.innerHeight - mh - 6) + "px";
+    menu._onDown = function (e) { if (!menu.contains(e.target)) closeTrackMenu(); };
+    setTimeout(function () {
+      document.addEventListener("pointerdown", menu._onDown, true);
+      window.addEventListener("blur", closeTrackMenu, { once: true });
+    }, 0);
+  }
   function syncSnapBox() {
     var b = S.root && S.root.querySelector('[data-act="snap"]');
     if (b) b.classList.toggle("active", S.snap);
@@ -885,6 +913,14 @@
       }).observe(document.body, { childList: true, subtree: true });
     } catch (e) {}
     window.addEventListener("keydown", onKey, true);
+    // window-capture beats the shared SaintorphanMenu's document-capture listener, so
+    // bin thumbnails show OUR menu only (no cross-plugin items). Clips are untouched.
+    window.addEventListener("contextmenu", function (e) {
+      var th = e.target && e.target.closest && e.target.closest(".r2r-lib-thumb");
+      if (!th) return;
+      e.stopImmediatePropagation(); e.preventDefault();
+      openLibMenu(e, th);
+    }, true);
   }
 
   window.R2RTimeline = { applyOp: applyOp, remount: tryMount, _state: S };
