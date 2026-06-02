@@ -95,13 +95,15 @@ _CTX_MENU_JS = (
     "if(b){b.value=v+'|'+Date.now();b.dispatchEvent(new Event('input',{bubbles:true}));}};"
     "var toG=function(el){var s=M.srcOf(el);if(s)relay('global|'+s);};"
     "var toP=function(el){var s=M.srcOf(el);if(s)relay('project|'+s);};"
-    "var toVid=function(el){var id=(el&&el.getAttribute)?el.getAttribute('data-id'):'';"
-    "relay('vid2vid|'+(id||''));};"
+    "var rid=function(el){return (el&&el.getAttribute)?(el.getAttribute('data-id')||''):'';};"
     "M.register('image','Reel2Reel Library (global)',toG);"
     "M.register('image','Reel2Reel Library (project)',toP);"
     "M.register('video','Reel2Reel Library (global)',toG);"
     "M.register('video','Reel2Reel Library (project)',toP);"
-    "M.register('.r2r-timeline-clip','Send to Vid2Vid',toVid);}"
+    "M.register('.r2r-timeline-clip','Send to Vid2Vid',function(el){relay('vid2vid|'+rid(el));});"
+    "M.register('.r2r-timeline-clip','Send → I2V first frame',function(el){relay('start|'+rid(el));});"
+    "M.register('.r2r-timeline-clip','Send → I2V last frame',function(el){relay('end|'+rid(el));});"
+    "M.register('.r2r-timeline-clip','Send → sliding-window anchor',function(el){relay('anchor|'+rid(el));});}"
     "})()\">")
 
 
@@ -109,7 +111,7 @@ class Reel2Reel(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
         self.name = PLUGIN_NAME
-        self.version = "0.3.0"
+        self.version = "0.3.1"
         self.description = ("Multi-track timeline editor: arrange AI clips on "
                             "video/audio tracks, detach/edit audio, transitions, "
                             "projects with versioning, a media library, a shared "
@@ -388,11 +390,29 @@ class Reel2Reel(WAN2GPPlugin):
                     upd["bin"] = self._bin_value()
                     upd["status"] = f"Added **{Path(path).name}** to the project bin."
                     gr.Info("Added to the Reel2Reel project bin.")
-            elif cmd == "vid2vid":
-                upd["status"] = self._vid2vid(state, payload, upd, names)
+            elif cmd in ("vid2vid", "start", "end", "anchor"):
+                which = "vid" if cmd == "vid2vid" else cmd
+                upd["status"] = self._send_to_gen(state, payload, which, upd)
         return upd[names[0]] if len(names) == 1 else tuple(upd[n] for n in names)
 
-    def _vid2vid(self, state, cid, upd, names):
+    def _frame_of(self, clip, which):
+        """A still IMAGE for the gen keyframe slots: the source image as-is, or a
+        frame extracted at the clip's in-point (first) / out-point (last). Never
+        returns the video path — falls back to the poster thumb, else None."""
+        if discovery.kind_of(clip.src) == "image":
+            return clip.src
+        fps = float(clip.src_fps or self._project.fps or 24)
+        t = float(clip.in_) if which == "first" else max(0.0, float(clip.out) - 1.0 / fps)
+        dest = str(paths.thumbs_dir() / f"frame_{clip.id}_{which}.jpg")
+        f = render.extract_frame(clip.src, t, dest)
+        if f is None and which != "first":     # out may exceed the source length
+            f = render.extract_frame(clip.src, float(clip.in_),
+                                     str(paths.thumbs_dir() / f"frame_{clip.id}_in.jpg"))
+        return f or clip.thumb
+
+    def _send_to_gen(self, state, cid, which, upd):
+        """Hand a clip (or a frame of it) to the Video Generator: video source
+        (Vid2Vid), I2V start/end keyframe, or a sliding-window anchor frame."""
         _, clip = self._project.find_clip(cid)
         if clip is None or not clip.src:
             gr.Warning("Couldn't find that clip on the timeline.")
@@ -401,11 +421,47 @@ class Reel2Reel(WAN2GPPlugin):
         if not callable(getter):
             return "This host doesn't expose the Video Generator settings."
         try:
-            settings = getter(state)
-            settings["video_source"] = clip.src
-            ipt = settings.get("image_prompt_type") or ""
-            if "V" not in ipt:
-                settings["image_prompt_type"] = ("V" + ipt) if ipt else "V"
+            s = getter(state)
+            if which == "vid":
+                s["video_source"] = clip.src
+                ipt = s.get("image_prompt_type") or ""
+                if "V" not in ipt:
+                    s["image_prompt_type"] = ("V" + ipt) if ipt else "V"
+                msg = "Vid2Vid source"
+            elif which == "start":
+                f = self._frame_of(clip, "first")
+                if not f:
+                    return "Couldn't extract a frame from that clip."
+                s["image_start"] = [f]
+                ipt = s.get("image_prompt_type") or ""
+                if "S" not in ipt:
+                    s["image_prompt_type"] = "S" + ipt
+                msg = "I2V first frame"
+            elif which == "end":
+                f = self._frame_of(clip, "last")
+                if not f:
+                    return "Couldn't extract a frame from that clip."
+                s["image_end"] = [f]
+                ipt = s.get("image_prompt_type") or ""
+                if "E" not in ipt:
+                    s["image_prompt_type"] = ipt + "E"
+                msg = "I2V last frame"
+            else:  # anchor — sliding-window reference frame at a timeline position
+                f = self._frame_of(clip, "first")
+                if not f:
+                    return "Couldn't extract a frame from that clip."
+                refs = list(s.get("image_refs") or [])
+                refs.append(f)
+                s["image_refs"] = refs
+                pos = max(1, round(float(clip.start) * int(self._project.fps)) + 1)
+                fp = (s.get("frames_positions") or "").strip()
+                s["frames_positions"] = f"{fp} {pos}".strip() if fp else str(pos)
+                vpt = s.get("video_prompt_type") or ""
+                if "F" not in vpt:
+                    s["video_prompt_type"] = vpt + "F"
+                msg = f"sliding-window anchor @frame {pos}"
+        except render.RenderError as e:
+            return f"Frame extraction failed: {e}"
         except Exception:
             traceback.print_exc()
             return "Couldn't hand the clip to the Video Generator."
@@ -413,8 +469,8 @@ class Reel2Reel(WAN2GPPlugin):
             upd["rft"] = time.time()
         if "main_tabs" in upd:
             upd["main_tabs"] = gr.Tabs(selected="video_gen")
-        gr.Info("Sent the clip to the Video Generator as a Vid2Vid source.")
-        return f"Sent **{clip.label or clip.id}** to Vid2Vid."
+        gr.Info(f"Sent to the Video Generator ({msg}).")
+        return f"Sent **{clip.label or clip.id}** → {msg}."
 
     # -- library ------------------------------------------------------------
     def _wire_library(self, c, subtabs):

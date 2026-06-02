@@ -353,6 +353,21 @@ def waveform(src: str, in_: float, out: float, dest: str,
         return None
 
 
+def extract_frame(src: str, t: float, dest: str) -> str | None:
+    """Grab a single frame at time ``t`` (seconds) from ``src`` into ``dest`` (jpg).
+    Used to seed the Video Generator's start / end / anchor keyframe slots."""
+    exe = ffmpeg_path()
+    if not exe:
+        return None
+    Path(dest).parent.mkdir(parents=True, exist_ok=True)
+    try:
+        run([exe, "-y", "-ss", f"{max(0.0, float(t)):.3f}", "-i", src,
+             "-frames:v", "1", "-q:v", "2", dest])
+        return dest if Path(dest).exists() else None
+    except Exception:
+        return None
+
+
 def ffmpeg_status() -> dict:
     exe = ffmpeg_path()
     return {"present": bool(exe), "path": exe or "", "version": ffmpeg_version(),

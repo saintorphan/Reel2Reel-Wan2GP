@@ -36,9 +36,14 @@ itself, so the user's plugins contribute entries to one right-click menu:
 
 - Any image/video in the app → **Reel2Reel Library (global)** / **(project)** —
   drops the media into the chosen bin.
-- A timeline clip → **Send to Vid2Vid** (native), plus **Replicant (Reference)**
-  / **ImageSuite (Img2Img / Inpaint)** when those plugins are installed (they
-  self-register against Reel2Reel's `.r2r-timeline-clip` surface).
+- A timeline clip → Reel2Reel's native sends to the Video Generator: **Send to
+  Vid2Vid** (whole clip → `video_source`), **Send → I2V first frame**
+  (`image_start`), **Send → I2V last frame** (`image_end`), and **Send →
+  sliding-window anchor** (`image_refs` + `frames_positions`, for long-video gen).
+  Reel2Reel extracts the frame with ffmpeg (in-point for first, out-point for last).
+- Plus **Replicant (Reference)** / **ImageSuite (Img2Img / Inpaint)** on those same
+  clips when those plugins are installed (they self-register against Reel2Reel's
+  `.r2r-timeline-clip` surface).
 
 ### Editor tooling
 
