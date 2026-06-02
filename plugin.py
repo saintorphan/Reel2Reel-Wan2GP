@@ -19,14 +19,16 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import traceback
 from pathlib import Path
+from urllib.parse import unquote
 
 import gradio as gr
 
 from shared.utils.plugins import WAN2GPPlugin
 
-from .core import discovery, inbox, paths, render, timeline
+from .core import discovery, inbox, paths, projects, render, timeline
 from .ui import logo, settings_panel, suite
 from .ui import timeline_widget as tw
 from .ui.styles import CSS
@@ -37,15 +39,81 @@ PLUGIN_ID = "Reel2Reel"
 PLUGIN_NAME = "Reel2Reel"
 _UNDO_CAP = 60
 
+# Shared saintorphan right-click menu. The scaffold block (window.SaintorphanMenu)
+# is COPIED VERBATIM from Replicant's _CTX_MENU_JS so whichever of the user's
+# plugins loads first builds the identical menu; our section is guarded by
+# M._reel2reel. We announce('reel2reel') — which fires the whenPresent('reel2reel')
+# hooks Replicant/ImageSuite register, so their "(Reference)" / "(Img2Img)" items
+# attach to our `.r2r-timeline-clip` surface automatically — and register our own
+# native command (Send to Vid2Vid), relayed to Python via #reel2reel-ctx-relay.
+# Injected via <img onerror> (gr.HTML innerHTML doesn't run <script>).
+_CTX_MENU_JS = (
+    "<img src=x style='display:none' onerror=\"(function(){"
+    "if(!window.SaintorphanMenu){var M=window.SaintorphanMenu={items:[],present:{},_w:{}};"
+    "M.announce=function(n){M.present[n]=true;(M._w[n]||[]).forEach(function(f){"
+    "try{f();}catch(e){console.error(e);}});M._w[n]=[];};"
+    "M.whenPresent=function(n,cb){if(M.present[n]){try{cb();}catch(e){console.error(e);}}"
+    "else{(M._w[n]||(M._w[n]=[])).push(cb);}};"
+    "M.register=function(match,label,handler){M.items.push("
+    "{match:match,label:label,handler:handler});};"
+    "M.srcOf=function(el){if(!el)return '';"
+    "var a=el.getAttribute&&el.getAttribute('data-media-src');if(a)return a;"
+    "if(el.currentSrc||el.src)return el.currentSrc||el.src;"
+    "var q=el.querySelector&&el.querySelector('img,video');"
+    "return q?(q.currentSrc||q.src||''):'';};"
+    "function hit(match,el){if(match==='image')return el.closest('img');"
+    "if(match==='video')return el.closest('video');"
+    "try{return el.closest(match);}catch(e){return null;}}"
+    "function close(){var m=document.getElementById('saintorphan-ctx');if(m)m.remove();}"
+    "function build(x,y,hits){close();"
+    "var menu=document.createElement('div');menu.id='saintorphan-ctx';"
+    "menu.style.cssText='position:fixed;z-index:99999;background:#1f2430;border:1px solid "
+    "#3a3f4b;border-radius:8px;padding:4px 0;box-shadow:0 6px 24px rgba(0,0,0,.5);"
+    "min-width:210px;font-family:sans-serif;font-size:13px;color:#e5e7eb;';"
+    "var h=document.createElement('div');h.textContent='saintorphan';"
+    "h.style.cssText='padding:4px 14px;font-weight:700;color:#e83e8c;cursor:default;"
+    "user-select:none;';menu.appendChild(h);"
+    "var hr=document.createElement('div');hr.style.cssText='height:1px;background:#3a3f4b;"
+    "margin:4px 0;';menu.appendChild(hr);"
+    "hits.forEach(function(hk){var el=document.createElement('div');el.textContent=hk.it.label;"
+    "el.style.cssText='padding:6px 14px;cursor:pointer;white-space:nowrap;';"
+    "el.onmouseenter=function(){el.style.background='#2d3340';};"
+    "el.onmouseleave=function(){el.style.background='';};"
+    "el.addEventListener('click',function(ev){ev.stopPropagation();close();"
+    "try{hk.it.handler(hk.el);}catch(err){console.error(err);}});menu.appendChild(el);});"
+    "document.body.appendChild(menu);var r=menu.getBoundingClientRect();"
+    "if(x+r.width>window.innerWidth)x=window.innerWidth-r.width-6;"
+    "if(y+r.height>window.innerHeight)y=window.innerHeight-r.height-6;"
+    "menu.style.left=x+'px';menu.style.top=y+'px';}"
+    "document.addEventListener('contextmenu',function(e){var hits=[];"
+    "M.items.forEach(function(it){var el=hit(it.match,e.target);if(el)hits.push({it:it,el:el});});"
+    "if(!hits.length)return;e.preventDefault();build(e.clientX,e.clientY,hits);},true);"
+    "document.addEventListener('click',close);document.addEventListener('scroll',close,true);}"
+    "var M=window.SaintorphanMenu;if(!M._reel2reel){M._reel2reel=true;M.announce('reel2reel');"
+    "var relay=function(v){var b=document.querySelector('#reel2reel-ctx-relay textarea')"
+    "||document.querySelector('#reel2reel-ctx-relay input');"
+    "if(b){b.value=v+'|'+Date.now();b.dispatchEvent(new Event('input',{bubbles:true}));}};"
+    "var toG=function(el){var s=M.srcOf(el);if(s)relay('global|'+s);};"
+    "var toP=function(el){var s=M.srcOf(el);if(s)relay('project|'+s);};"
+    "var toVid=function(el){var id=(el&&el.getAttribute)?el.getAttribute('data-id'):'';"
+    "relay('vid2vid|'+(id||''));};"
+    "M.register('image','Reel2Reel Library (global)',toG);"
+    "M.register('image','Reel2Reel Library (project)',toP);"
+    "M.register('video','Reel2Reel Library (global)',toG);"
+    "M.register('video','Reel2Reel Library (project)',toP);"
+    "M.register('.r2r-timeline-clip','Send to Vid2Vid',toVid);}"
+    "})()\">")
+
 
 class Reel2Reel(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
         self.name = PLUGIN_NAME
-        self.version = "0.2.0"
+        self.version = "0.3.0"
         self.description = ("Multi-track timeline editor: arrange AI clips on "
-                            "video/audio tracks, detach/edit audio, add fades and "
-                            "cross-dissolves, and export a final cut with ffmpeg.")
+                            "video/audio tracks, detach/edit audio, transitions, "
+                            "projects with versioning, a media library, a shared "
+                            "right-click menu, and ffmpeg export.")
         self._project = timeline.Timeline()
         self._seq = 0
         self._library: list[dict] = []
@@ -53,11 +121,19 @@ class Reel2Reel(WAN2GPPlugin):
         self._undo: list[str] = []
         self._redo: list[str] = []
         self._last_sig = ""
+        self._project_name: str | None = None
+        self._bin: list[str] = []          # current project's media bin
+        self._gbin: list[str] = []         # global (cross-project) media bin
+        self._bin_view: list[dict] = []
+        self._gbin_view: list[dict] = []
+        self._ctx_out: list[str] = []      # context-menu relay output order
 
     # -- lifecycle ----------------------------------------------------------
     def setup_ui(self):
         try:
             paths.ensure_dirs()
+            projects.migrate_legacy()
+            self._gbin = projects.get_global_bin()
         except Exception:
             traceback.print_exc()
         js = tw.timeline_js()
@@ -101,19 +177,31 @@ class Reel2Reel(WAN2GPPlugin):
             "mark();new MutationObserver(mark).observe(document.body,"
             "{childList:true,subtree:true});})()\">",
             elem_classes="reel2reel-hidden")
+        # Shared saintorphan right-click menu (scaffold + announce + our command).
+        gr.HTML(_CTX_MENU_JS, elem_classes="reel2reel-hidden")
 
         with gr.Column(elem_id="reel2reel-root"):
             gr.HTML(logo.banner_html())
             ui = suite.build_suite()
+            # Relay for the timeline context-menu's native commands (JS -> Python).
+            self.ctx_relay = gr.Textbox(elem_id="reel2reel-ctx-relay", visible=False,
+                                       interactive=True, value="")
 
         tl = ui["pages"]["timeline"]
+        lib = ui["pages"]["library"]
         self.tl_to_py = tl["tl_to_py"]
         self.tl_from_py = tl["tl_from_py"]
         self.trk_dd = tl["trk_dd"]
+        self.proj_dd = tl["proj_dd"]
+        self.ver_dd = tl["ver_dd"]
+        self.bin_gallery = lib["bin_gallery"]
+        self.global_gallery = lib["global_gallery"]
         self._last_sig = self._content_sig()
         self._wire(ui)
-        # On tab entry: drain the inbox + reload the timeline + refresh the track list.
-        self.on_tab_outputs = [self.tl_from_py, self.trk_dd]
+        # On tab entry: drain the inbox, reload the timeline, refresh tracks /
+        # project list / versions / both media bins.
+        self.on_tab_outputs = [self.tl_from_py, self.trk_dd, self.proj_dd,
+                               self.ver_dd, self.bin_gallery, self.global_gallery]
         return ui
 
     # -- inbox --------------------------------------------------------------
@@ -127,7 +215,10 @@ class Reel2Reel(WAN2GPPlugin):
                 self._last_sig = self._content_sig()
         except Exception:
             traceback.print_exc()
-        return self._load_envelope(), gr.update(choices=self._track_choices())
+        return (self._load_envelope(), gr.update(choices=self._track_choices()),
+                gr.update(choices=projects.list_projects(), value=self._project_name),
+                gr.update(choices=self._ver_choices()),
+                self._bin_value(), self._gbin_value())
 
     # -- envelopes / signatures --------------------------------------------
     def _edit_payload(self) -> dict:
@@ -160,6 +251,57 @@ class Reel2Reel(WAN2GPPlugin):
 
     def _track_choices(self):
         return [(f"{t.name} · {t.kind}", t.id) for t in self._project.tracks]
+
+    def _ver_choices(self):
+        return projects.version_labels(self._project_name) if self._project_name else []
+
+    def _current_md(self):
+        return (f"**Open project:** `{self._project_name}`" if self._project_name
+                else "*No project open — use **Save as** to name one.*")
+
+    @staticmethod
+    def _dedup(items):
+        seen, out = set(), []
+        for p in items:
+            if p and p not in seen:
+                seen.add(p)
+                out.append(p)
+        return out
+
+    def _bin_thumb(self, path):
+        cid = f"bin_{abs(hash(path)) % 10**8}"
+        return discovery.thumbnail(path, cid, getattr(self, "get_video_frame", None))
+
+    def _gallery_value(self, items, view_attr):
+        view, gallery = [], []
+        for p in items:
+            if not Path(p).exists():
+                continue
+            try:
+                thumb = self._bin_thumb(p)
+            except Exception:
+                thumb = None
+            view.append({"path": p, "thumb": thumb, "name": Path(p).name})
+            gallery.append((thumb or p, Path(p).name))
+        setattr(self, view_attr, view)
+        return gallery
+
+    def _bin_value(self):
+        return self._gallery_value(self._bin, "_bin_view")
+
+    def _gbin_value(self):
+        return self._gallery_value(self._gbin, "_gbin_view")
+
+    def _url_to_path(self, url):
+        """A /gradio_api/file=… (or /file=…) URL, or a bare path, → absolute path."""
+        if not url or url.startswith("data:"):
+            return None
+        u = url.split("?", 1)[0]
+        for marker in ("/gradio_api/file=", "/file="):
+            i = u.find(marker)
+            if i >= 0:
+                return unquote(u[i + len(marker):])
+        return unquote(u) if u.startswith("/") else None
 
     # -- clip ingest --------------------------------------------------------
     def _thumb_for(self, clip, kind):
@@ -196,6 +338,83 @@ class Reel2Reel(WAN2GPPlugin):
         self._wire_timeline(pages["timeline"])
         self._wire_render(pages["render"])
         self._wire_settings(ui["settings"], pages)
+        self._wire_ctx(pages["library"])
+
+    # -- shared context-menu relay (global/project bin + native Vid2Vid) ----
+    def _wire_ctx(self, lib):
+        relay = getattr(self, "ctx_relay", None)
+        state = getattr(self, "state", None)
+        if relay is None or state is None:
+            logger.warning("Context-menu relay not wired (relay=%s, state=%s); the "
+                           "right-click 'Reel2Reel Library' / 'Send to Vid2Vid' items "
+                           "won't reach Python.", relay is not None, state is not None)
+            return
+        # Ordered outputs; the handler returns values positionally for whichever
+        # targets exist on this host.
+        out = [("bin", lib["bin_gallery"]), ("global", lib["global_gallery"]),
+               ("status", lib["status"])]
+        rft = getattr(self, "refresh_form_trigger", None)
+        mt = getattr(self, "main_tabs", None)
+        if rft is not None:
+            out.append(("rft", rft))
+        if mt is not None:
+            out.append(("main_tabs", mt))
+        self._ctx_out = [n for n, _ in out]
+        relay.change(self._on_ctx, inputs=[state, relay],
+                    outputs=[c for _, c in out], show_progress="hidden")
+
+    def _on_ctx(self, state, val):
+        names = getattr(self, "_ctx_out", [])
+        upd = {n: gr.update() for n in names}
+        if val:
+            parts = str(val).split("|")
+            cmd = parts[0] if parts else ""
+            payload = "|".join(parts[1:-1]) if len(parts) > 2 else \
+                (parts[1] if len(parts) > 1 else "")
+            if cmd in ("global", "project"):
+                path = self._url_to_path(payload)
+                if not path:
+                    upd["status"] = "Couldn't resolve that media to a file."
+                elif cmd == "global":
+                    self._gbin = self._dedup(self._gbin + [path])
+                    projects.set_global_bin(self._gbin)
+                    upd["global"] = self._gbin_value()
+                    upd["status"] = f"Added **{Path(path).name}** to the global library."
+                    gr.Info("Added to the Reel2Reel global library.")
+                else:
+                    self._bin = self._dedup(self._bin + [path])
+                    if self._project_name:
+                        projects.set_bin(self._project_name, self._bin)
+                    upd["bin"] = self._bin_value()
+                    upd["status"] = f"Added **{Path(path).name}** to the project bin."
+                    gr.Info("Added to the Reel2Reel project bin.")
+            elif cmd == "vid2vid":
+                upd["status"] = self._vid2vid(state, payload, upd, names)
+        return upd[names[0]] if len(names) == 1 else tuple(upd[n] for n in names)
+
+    def _vid2vid(self, state, cid, upd, names):
+        _, clip = self._project.find_clip(cid)
+        if clip is None or not clip.src:
+            gr.Warning("Couldn't find that clip on the timeline.")
+            return "Clip not found."
+        getter = getattr(self, "get_current_model_settings", None)
+        if not callable(getter):
+            return "This host doesn't expose the Video Generator settings."
+        try:
+            settings = getter(state)
+            settings["video_source"] = clip.src
+            ipt = settings.get("image_prompt_type") or ""
+            if "V" not in ipt:
+                settings["image_prompt_type"] = ("V" + ipt) if ipt else "V"
+        except Exception:
+            traceback.print_exc()
+            return "Couldn't hand the clip to the Video Generator."
+        if "rft" in upd:
+            upd["rft"] = time.time()
+        if "main_tabs" in upd:
+            upd["main_tabs"] = gr.Tabs(selected="video_gen")
+        gr.Info("Sent the clip to the Video Generator as a Vid2Vid source.")
+        return f"Sent **{clip.label or clip.id}** to Vid2Vid."
 
     # -- library ------------------------------------------------------------
     def _wire_library(self, c, subtabs):
@@ -203,6 +422,82 @@ class Reel2Reel(WAN2GPPlugin):
         c["gallery"].select(self._on_pick, outputs=[c["picked"]])
         c["add"].click(self._add_to_timeline, inputs=[c["picked"], c["kind"]],
                       outputs=[self.tl_from_py, subtabs, self.trk_dd, c["status"]])
+        c["add_gbin"].click(self._add_to_global, inputs=[c["picked"]],
+                           outputs=[c["global_gallery"], c["status"]])
+        c["add_pbin"].click(self._add_to_project_bin, inputs=[c["picked"]],
+                           outputs=[c["bin_gallery"], c["status"]])
+        # project bin
+        c["bin_gallery"].select(self._bin_pick, outputs=[c["bin_picked"]])
+        c["bin_add_tl"].click(self._bin_add_tl, inputs=[c["bin_picked"], c["bin_kind"]],
+                             outputs=[self.tl_from_py, self.trk_dd, c["status"]])
+        c["bin_remove"].click(self._bin_remove, inputs=[c["bin_picked"]],
+                             outputs=[c["bin_gallery"], c["bin_picked"], c["status"]])
+        # global bin
+        c["global_gallery"].select(self._gbin_pick, outputs=[c["global_picked"]])
+        c["global_add_tl"].click(self._gbin_add_tl,
+                                inputs=[c["global_picked"], c["global_kind"]],
+                                outputs=[self.tl_from_py, self.trk_dd, c["status"]])
+        c["global_remove"].click(self._gbin_remove, inputs=[c["global_picked"]],
+                                outputs=[c["global_gallery"], c["global_picked"], c["status"]])
+
+    # -- media bins ---------------------------------------------------------
+    def _add_to_global(self, picked):
+        if not picked:
+            raise gr.Error("Select an output first.")
+        self._gbin = self._dedup(self._gbin + [picked])
+        projects.set_global_bin(self._gbin)
+        return self._gbin_value(), f"Added **{Path(picked).name}** to the global library."
+
+    def _add_to_project_bin(self, picked):
+        if not picked:
+            raise gr.Error("Select an output first.")
+        self._bin = self._dedup(self._bin + [picked])
+        if self._project_name:
+            projects.set_bin(self._project_name, self._bin)
+        return self._bin_value(), f"Added **{Path(picked).name}** to the project bin."
+
+    def _bin_pick(self, evt: gr.SelectData):
+        try:
+            return self._bin_view[evt.index]["path"]
+        except Exception:
+            return None
+
+    def _gbin_pick(self, evt: gr.SelectData):
+        try:
+            return self._gbin_view[evt.index]["path"]
+        except Exception:
+            return None
+
+    def _bin_add_tl(self, picked, kind):
+        if not picked:
+            raise gr.Error("Pick a clip in the project bin first.")
+        self._push_undo()
+        self._ingest_clip(picked, force_kind=kind if kind in ("Video", "Audio") else "auto")
+        return self._env_after(), gr.update(choices=self._track_choices()), \
+            f"Added **{Path(picked).stem}** to the timeline."
+
+    def _gbin_add_tl(self, picked, kind):
+        if not picked:
+            raise gr.Error("Pick a clip in the global library first.")
+        self._push_undo()
+        self._ingest_clip(picked, force_kind=kind if kind in ("Video", "Audio") else "auto")
+        return self._env_after(), gr.update(choices=self._track_choices()), \
+            f"Added **{Path(picked).stem}** to the timeline."
+
+    def _bin_remove(self, picked):
+        if not picked:
+            raise gr.Error("Pick a project-bin item first.")
+        self._bin = [p for p in self._bin if p != picked]
+        if self._project_name:
+            projects.set_bin(self._project_name, self._bin)
+        return self._bin_value(), None, "Removed from the project bin."
+
+    def _gbin_remove(self, picked):
+        if not picked:
+            raise gr.Error("Pick a global-library item first.")
+        self._gbin = [p for p in self._gbin if p != picked]
+        projects.set_global_bin(self._gbin)
+        return self._gbin_value(), None, "Removed from the global library."
 
     def _refresh_library(self):
         self._library = []
@@ -275,13 +570,28 @@ class Reel2Reel(WAN2GPPlugin):
         c["trk_down"].click(lambda t: self._move_track(t, 1), inputs=[c["trk_dd"]],
                            outputs=[self.tl_from_py, self.trk_dd, c["status"]])
 
-        # Projects
-        c["new"].click(self._new_project, inputs=[c["proj_name"]],
-                      outputs=[self.tl_from_py, c["load_name"], self.trk_dd, c["status"]])
-        c["save"].click(self._save_project, inputs=[c["proj_name"]],
-                       outputs=[c["load_name"], c["status"]])
-        c["load"].click(self._load_project, inputs=[c["load_name"]],
-                       outputs=[self.tl_from_py, c["proj_name"], self.trk_dd, c["status"]])
+        # Projects: CRUD + versioning
+        proj_io = [self.tl_from_py, c["proj_dd"], c["proj_name"], c["current_lbl"],
+                   self.trk_dd, c["ver_dd"], c["status"]]
+        c["open"].click(self._open_project, inputs=[c["proj_dd"]], outputs=proj_io)
+        c["new"].click(self._new_project, inputs=[c["proj_name"]], outputs=proj_io)
+        c["saveas"].click(self._saveas_project, inputs=[c["proj_name"]],
+                         outputs=[c["proj_dd"], c["proj_name"], c["current_lbl"],
+                                  c["ver_dd"], c["status"]])
+        c["save"].click(self._save_project, outputs=[c["current_lbl"], c["status"]])
+        c["rename"].click(self._rename_project, inputs=[c["proj_name"]],
+                         outputs=[c["proj_dd"], c["proj_name"], c["current_lbl"], c["status"]])
+        c["dup"].click(self._dup_project, inputs=[c["proj_name"]],
+                      outputs=[c["proj_dd"], c["status"]])
+        c["delete"].click(self._delete_project, inputs=[c["proj_dd"]],
+                         outputs=[c["proj_dd"], c["current_lbl"], c["status"]])
+        # Versions (manual named snapshots)
+        c["snapshot"].click(self._snapshot, inputs=[c["ver_label"]],
+                           outputs=[c["ver_dd"], c["ver_label"], c["status"]])
+        c["restore"].click(self._restore_version, inputs=[c["ver_dd"]],
+                          outputs=[self.tl_from_py, self.trk_dd, c["status"]])
+        c["delver"].click(self._delete_version, inputs=[c["ver_dd"]],
+                         outputs=[c["ver_dd"], c["status"]])
 
     def _on_timeline_change(self, payload: str):
         if not payload:
@@ -458,32 +768,129 @@ class Reel2Reel(WAN2GPPlugin):
         self._project = timeline.from_document(json.loads(self._redo.pop()))
         return self._env_after(), gr.update(choices=self._track_choices()), "Redid."
 
-    # -- projects -----------------------------------------------------------
-    def _new_project(self, name):
-        self._push_undo()
-        self._project = timeline.Timeline(name=name or "Cut 1")
-        return (self._env_after(), gr.update(choices=paths.list_projects()),
+    # -- projects: CRUD + versioning ----------------------------------------
+    def _proj_io(self, status):
+        """The 7-tuple returned by open/new (env, proj_dd, name, current, tracks,
+        versions, status)."""
+        return (self._load_envelope(),
+                gr.update(choices=projects.list_projects(), value=self._project_name),
+                gr.update(value=self._project_name or ""), self._current_md(),
                 gr.update(choices=self._track_choices()),
-                f"New project **{self._project.name}**.")
+                gr.update(choices=self._ver_choices()), status)
 
-    def _save_project(self, name):
-        self._project.name = name or self._project.name
-        try:
-            p = timeline.save(paths.project_path(self._project.name), self._project)
-        except Exception as e:
-            return gr.update(), f"⚠️ Could not save: {e}"
-        return gr.update(choices=paths.list_projects()), f"Saved `{p}`."
+    def _switch_to(self, name, tl):
+        self._project = tl
+        self._project_name = name
+        self._bin = projects.get_bin(name) if name else []
+        self._undo.clear()
+        self._redo.clear()
+        self._last_sig = self._content_sig()
 
-    def _load_project(self, name):
+    def _open_project(self, name):
         if not name:
             raise gr.Error("Pick a project to open.")
+        tl = projects.load_timeline(name)
+        if tl is None:
+            raise gr.Error(f"Could not open '{name}'.")
+        self._switch_to(name, tl)
+        return self._proj_io(f"Opened **{name}**.")
+
+    def _new_project(self, name):
+        name = (name or "").strip()
+        if not name:
+            raise gr.Error("Enter a name for the new project.")
+        if projects.exists(name):
+            raise gr.Error(f"'{name}' already exists — Open it instead.")
+        projects.create(name)
+        self._switch_to(name, timeline.Timeline(name=name))
+        projects.save_timeline(name, self._project)
+        return self._proj_io(f"Created **{name}**.")
+
+    def _save_project(self):
+        if not self._project_name:
+            return self._current_md(), "No project open — use **Save as** to name one."
         try:
-            self._push_undo()
-            self._project = timeline.load(paths.project_path(name))
+            projects.save_timeline(self._project_name, self._project)
+            projects.set_bin(self._project_name, self._bin)
         except Exception as e:
-            raise gr.Error(f"Could not open '{name}': {e}")
-        return (self._env_after(), self._project.name,
-                gr.update(choices=self._track_choices()), f"Opened **{name}**.")
+            return self._current_md(), f"⚠️ Could not save: {e}"
+        return self._current_md(), f"Saved **{self._project_name}**."
+
+    def _saveas_project(self, name):
+        name = (name or "").strip()
+        if not name:
+            raise gr.Error("Enter a name to save as.")
+        if projects.exists(name):
+            raise gr.Error(f"'{name}' already exists — pick another name.")
+        projects.create(name, self._project)
+        projects.set_bin(name, self._bin)
+        self._project_name = name
+        return (gr.update(choices=projects.list_projects(), value=name), name,
+                self._current_md(), gr.update(choices=self._ver_choices()),
+                f"Saved as **{name}**.")
+
+    def _rename_project(self, name):
+        if not self._project_name:
+            raise gr.Error("Open a project first.")
+        name = (name or "").strip()
+        if not name:
+            raise gr.Error("Enter the new name.")
+        try:
+            projects.rename(self._project_name, name)
+        except Exception as e:
+            raise gr.Error(str(e))
+        self._project_name = name
+        self._project.name = name
+        return (gr.update(choices=projects.list_projects(), value=name), name,
+                self._current_md(), f"Renamed to **{name}**.")
+
+    def _dup_project(self, name):
+        if not self._project_name:
+            raise gr.Error("Open a project first.")
+        name = (name or "").strip()
+        if not name:
+            raise gr.Error("Enter a name for the duplicate.")
+        try:
+            projects.duplicate(self._project_name, name)
+        except Exception as e:
+            raise gr.Error(str(e))
+        return gr.update(choices=projects.list_projects()), f"Duplicated to **{name}**."
+
+    def _delete_project(self, name):
+        if not name:
+            raise gr.Error("Pick a project to delete.")
+        projects.delete(name)
+        if name == self._project_name:
+            # Close the project but KEEP the in-memory timeline (don't wipe the
+            # user's canvas); its bin is gone, so clear that.
+            self._project_name = None
+            self._bin = []
+        return (gr.update(choices=projects.list_projects(), value=None),
+                self._current_md(), f"Deleted **{name}**.")
+
+    def _snapshot(self, label):
+        if not self._project_name:
+            raise gr.Error("Save the project first (Save as), then snapshot.")
+        lbl = projects.snapshot(self._project_name, label, self._project)
+        return gr.update(choices=self._ver_choices()), "", f"Snapshot **{lbl}** saved."
+
+    def _restore_version(self, label):
+        if not (self._project_name and label):
+            raise gr.Error("Open a project and pick a version.")
+        tl = projects.restore_version(self._project_name, label)
+        if tl is None:
+            raise gr.Error(f"Version '{label}' not found.")
+        self._push_undo()
+        self._project = tl
+        self._last_sig = self._content_sig()
+        return (self._load_envelope(), gr.update(choices=self._track_choices()),
+                f"Restored version **{label}**.")
+
+    def _delete_version(self, label):
+        if not (self._project_name and label):
+            raise gr.Error("Pick a version to delete.")
+        projects.delete_version(self._project_name, label)
+        return gr.update(choices=self._ver_choices(), value=None), f"Deleted version **{label}**."
 
     # -- render -------------------------------------------------------------
     def _wire_render(self, c):

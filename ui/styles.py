@@ -10,8 +10,9 @@ CSS = f"""
 #reel2reel-root .reel2reel-acc {{ border-radius: 10px; }}
 .reel2reel-hidden {{ display: none !important; }}
 
-/* amber accent on our main-webui tab button (tagged from JS in plugin.py) */
-button.reel2reel-tabbtn {{ border-bottom: 2px solid {_ACCENT} !important; }}
+/* Green-coded main-webui tab button (tagged from JS in plugin.py), matching the
+   other saintorphan plugins' tab color-coding (ImageSuite pink, Replicant violet). */
+button.reel2reel-tabbtn {{ border: 2px solid #2ea043 !important; border-radius: 6px; }}
 
 #reel2reel-root .reel2reel-prim {{ background: {_ACCENT}; border-color: {_ACCENT_DK}; }}
 #reel2reel-root .reel2reel-gallery {{ min-height: 300px; }}

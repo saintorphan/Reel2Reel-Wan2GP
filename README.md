@@ -6,18 +6,39 @@ A **multi-track timeline video editor** inside Wan2GP. Generate clips with the
 Video Generator (or anywhere else), **send them to Reel2Reel**, arrange them on
 video/audio tracks, trim and split, then **export a final cut** with ffmpeg.
 
-> ⚠️ **Early build (v0.2.0) — improving fast.** Full editor tooling is in:
-> multi-track video/audio, **detach audio from video**, gain/fades/opacity,
-> mute/solo, cross-dissolves, undo/redo, playback transport and ffmpeg export all
-> work. The in-browser preview is still a single approximate `<video>` (export
-> for the real composite). Expect rough edges.
+> ⚠️ **Early build (v0.3.0) — improving fast.** Multi-track video/audio,
+> **detach audio from video**, fades/opacity, mute/solo, cross-dissolves,
+> undo/redo, **Projects with named-snapshot versioning**, a **global + per-project
+> media library**, a **shared right-click menu**, and ffmpeg export all work. The
+> in-browser preview is still a single approximate `<video>` (export for the real
+> composite). Expect rough edges.
 
 | Sub-tab | What it does |
 |---------|--------------|
-| **📚 Library** | Browse the Wan2GP outputs folder (newest first) and add clips to a video or audio track. |
-| **🎞 Timeline** | A real multi-track canvas: drag to move, drag an edge to trim, ruler scrub, **Space** to play, **S** split, snap + zoom-to-fit. Per-clip inspector (gain, fade in/out, opacity, mute), **detach audio**, duplicate, ripple/lift delete, **cross-dissolve** transitions, per-track volume/mute/solo/lock + reorder, **undo/redo**. Save / open projects. |
+| **📚 Library** | A **global** (cross-project) and a **per-project** media bin, plus the Wan2GP outputs browser. Send media to either bin from the right-click menu or the outputs browser; add bin clips to a video/audio track. |
+| **🎞 Timeline** | A real multi-track canvas: drag/trim, ruler scrub, **Space** play, **S** split, snap + zoom-to-fit. Per-clip inspector (gain, fades, opacity, mute), **detach audio**, duplicate, ripple/lift delete, **cross-dissolve** transitions, per-track volume/mute/solo/lock + reorder, **undo/redo**. **Projects**: open/new/save/save-as/rename/duplicate/delete + named version snapshots. |
 | **🎬 Render** | Composite the timeline to an mp4 with ffmpeg, preview it, and send the final cut to **Img2Vid** or **Save As**. |
 | **⚙ Settings** | Repoint the projects / renders / import-from dirs; check ffmpeg. |
+
+### Projects & Library
+
+- **Projects** — every cut is a named Project (folder under `projects_dir`) with
+  full CRUD (open / new / save / **save as** / rename / duplicate / delete) and
+  **manual named version snapshots** you can restore at any time.
+- **Library** — a persistent **global** media bin (reusable across all projects)
+  and a **per-project** bin, alongside the outputs browser. Drag bin clips onto
+  the timeline.
+
+### Right-click menu (shared "saintorphan" engine)
+
+Reel2Reel embeds the shared `window.SaintorphanMenu` engine and `announce()`s
+itself, so the user's plugins contribute entries to one right-click menu:
+
+- Any image/video in the app → **Reel2Reel Library (global)** / **(project)** —
+  drops the media into the chosen bin.
+- A timeline clip → **Send to Vid2Vid** (native), plus **Replicant (Reference)**
+  / **ImageSuite (Img2Img / Inpaint)** when those plugins are installed (they
+  self-register against Reel2Reel's `.r2r-timeline-clip` surface).
 
 ### Editor tooling
 
@@ -99,21 +120,24 @@ Drop banner artwork at `assets/reel2reel_logo.png` (base64-embedded top-right).
 
 ## Status
 
-v0.2.0. **Working:**
+v0.3.0. **Working:**
 
-- Loads as a Wan2GP tab; multi-track DOM timeline with drag-move, edge-trim,
-  ruler scrubbing, zoom + zoom-to-fit, snapping, split, add/remove/reorder tracks,
-  playback transport and keyboard shortcuts.
+- Loads as a Wan2GP tab (**green** tab color-coding) with the shared
+  `SaintorphanMenu` right-click engine + `announce('reel2reel')`.
+- Multi-track DOM timeline: drag/trim, ruler scrub, zoom + zoom-to-fit, snapping,
+  split, add/remove/reorder tracks, playback transport, keyboard shortcuts.
 - **Audio editing** — per-clip gain + fade in/out, per-track volume, mute/solo/lock,
-  and **detach audio from video** (separate audio onto its own track). Waveforms.
-- **Video** — multi-track overlay compositing, per-clip opacity + alpha fades, and
-  **cross-dissolve** transitions (xfade video + ripple).
-- **Undo / redo** across both browser edits and panel operations.
-- Library import from the outputs folder; the `inbox` send-to mechanism.
-- Project save / open (`Reel2ReelProject.1` JSON).
+  **detach audio from video**, waveforms.
+- **Video** — multi-track overlay compositing, per-clip opacity + alpha fades,
+  **cross-dissolve** transitions (xfade + ripple).
+- **Undo / redo** across browser edits and panel operations.
+- **Projects** — CRUD + manual named version snapshots; legacy flat files migrate.
+- **Library** — global + per-project media bins + outputs browser; the `inbox`
+  send-to mechanism.
+- **Right-click menu** — Reel2Reel Library (global/project) on any media; Send to
+  Vid2Vid on timeline clips; Replicant/ImageSuite items self-attach when installed.
 - Export to mp4 via the two-stage ffmpeg pipeline (normalize → per-track
-  concat/xfade overlay-onto-canvas → `adelay`/`amix`/`loudnorm`), verified end-to-end
-  for transitions, fades, multi-track overlay and multi-track audio.
+  concat/xfade overlay-onto-canvas → `adelay`/`amix`/`loudnorm`), verified end-to-end.
 - "Send final cut to Img2Vid" (host-permitting) and Save As.
 
 **Deferred:** frame-accurate / multi-clip compositing **preview** in the browser

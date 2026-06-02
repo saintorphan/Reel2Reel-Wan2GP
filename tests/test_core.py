@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core import timeline, otio, render  # noqa: E402
+from core import timeline, otio, render, projects, paths  # noqa: E402
 
 
 def _tl():
@@ -170,6 +170,58 @@ def test_render_transition():
     print("✓ ffmpeg render with cross-dissolve + fades + audio-from-video")
 
 
+def test_projects():
+    with tempfile.TemporaryDirectory() as d:
+        os.environ["REEL2REEL_DIR"] = d
+        paths._config = None
+        paths.ensure_dirs()
+        # legacy flat file migrates into the folder layout
+        timeline.save(paths.projects_dir() / "Old.r2r.json", timeline.Timeline(name="Old"))
+        assert projects.list_projects() == ["Old"], projects.list_projects()
+        # create + load (no duplicate tracks)
+        tl = timeline.Timeline(name="A")
+        v = tl.first_track("Video")
+        tl.add_clip(timeline.Clip(id="c1", src="/x.mp4", start=0, in_=0, out=2, track=v.id))
+        projects.create("A", tl)
+        assert len(projects.load_timeline("A").tracks) == 2
+        # versioning
+        projects.snapshot("A", "v1", tl)
+        tl.add_clip(timeline.Clip(id="c2", src="/y.mp4", start=2, in_=0, out=1, track=v.id))
+        projects.save_timeline("A", tl)
+        projects.snapshot("A", "v2", tl)
+        assert projects.version_labels("A") == ["v1", "v2"]
+        assert sum(len(t.clips) for t in projects.restore_version("A", "v1").tracks) == 1
+        assert projects.delete_version("A", "v1") and projects.version_labels("A") == ["v2"]
+        # distinct labels with colliding slugs must get distinct files (no wrong restore)
+        one = timeline.Timeline(name="A")
+        vt = one.first_track("Video")
+        one.add_clip(timeline.Clip(id="x", src="/1.mp4", start=0, in_=0, out=1, track=vt.id))
+        projects.snapshot("A", "v1@beta", one)
+        two = timeline.Timeline(name="A")
+        wt = two.first_track("Video")
+        two.add_clip(timeline.Clip(id="y", src="/2.mp4", start=0, in_=0, out=1, track=wt.id))
+        two.add_clip(timeline.Clip(id="z", src="/3.mp4", start=1, in_=0, out=1, track=wt.id))
+        projects.snapshot("A", "v1_beta", two)          # same slug as v1@beta
+        files = {v["label"]: v["file"] for v in projects.list_versions("A")}
+        assert files["v1@beta"] != files["v1_beta"], files
+        assert sum(len(t.clips) for t in projects.restore_version("A", "v1@beta").tracks) == 1
+        assert sum(len(t.clips) for t in projects.restore_version("A", "v1_beta").tracks) == 2
+        # project bin + global bin
+        projects.add_to_bin("A", ["/a", "/b"]); projects.add_to_bin("A", "/a")
+        assert projects.get_bin("A") == ["/a", "/b"]
+        projects.add_to_global_bin("/g1"); projects.add_to_global_bin("/g1")
+        assert projects.get_global_bin() == ["/g1"]
+        # rename / duplicate (carries bin) / delete
+        projects.rename("A", "A2")
+        assert projects.exists("A2") and not projects.exists("A")
+        projects.duplicate("A2", "A3")
+        assert projects.get_bin("A3") == ["/a", "/b"]
+        assert projects.delete("A3") and not projects.exists("A3")
+    os.environ.pop("REEL2REEL_DIR", None)
+    paths._config = None
+    print("✓ projects CRUD + versioning + project/global bins (+legacy migrate)")
+
+
 def test_render_smoke():
     if not render.ffmpeg_path():
         print("· render smoke skipped (ffmpeg not found)")
@@ -206,6 +258,7 @@ if __name__ == "__main__":
     test_detach_audio()
     test_clip_track_ops()
     test_transitions()
+    test_projects()
     test_render_transition()
     test_render_smoke()
     print("\nALL PASSED")

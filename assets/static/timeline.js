@@ -104,9 +104,14 @@
 
   function renderClip(c, t) {
     var el = document.createElement("div");
-    el.className = "r2r-clip" + (S.edit.ui && S.edit.ui.selected === c.id ? " sel" : "")
+    // r2r-timeline-clip + data-media-src are the shared SaintorphanMenu convention:
+    // other saintorphan plugins (Replicant/ImageSuite) register their items against
+    // this surface and read the clip's frame/image from data-media-src.
+    el.className = "r2r-clip r2r-timeline-clip"
+      + (S.edit.ui && S.edit.ui.selected === c.id ? " sel" : "")
       + (c.mute ? " muted" : "");
     el.dataset.id = c.id;
+    el.setAttribute("data-media-src", c.thumb_url || c.url || "");
     el.style.transform = "translateX(" + sec2px(c.start) + "px)";
     el.style.width = Math.max(8, sec2px(c.dur)) + "px";
     if (c.thumb_url) el.style.backgroundImage = "url('" + c.thumb_url + "')";

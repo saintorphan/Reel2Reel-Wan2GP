@@ -18,20 +18,49 @@ MODES = ("library", "timeline", "render")
 
 def _library() -> dict:
     c = {"mode": "library"}
-    gr.Markdown("### Library — your generated clips\n"
-                "Newest first, from the Wan2GP outputs folder (and your renders). "
-                "Pick one and **Add to timeline**, or just switch to the Video "
-                "Generator and *Send to Reel2Reel* from there.")
+    gr.Markdown("### Library")
+
+    # --- global media bin (cross-project, persistent) ---
+    with gr.Accordion("🌐 Library (global) — reusable across all projects", open=False):
+        c["global_gallery"] = gr.Gallery(label="Global bin", columns=6, height=180,
+                                        object_fit="cover", preview=False, allow_preview=False)
+        c["global_picked"] = gr.State(None)
+        with gr.Row():
+            c["global_kind"] = gr.Radio(["auto", "Video", "Audio"], value="auto",
+                                       label="Add to track", scale=1)
+            c["global_add_tl"] = gr.Button("➕ Add to timeline", variant="primary",
+                                          scale=1, elem_classes="reel2reel-prim")
+            c["global_remove"] = gr.Button("✖ Remove", scale=1)
+
+    # --- per-project media bin ---
+    with gr.Accordion("📦 Library (project) — media for the open project", open=True):
+        gr.Markdown("Right-click any clip in the app → *Reel2Reel Library (global/project)* "
+                    "drops it into these bins; pick one and **Add to timeline**.")
+        c["bin_gallery"] = gr.Gallery(label="Project bin", columns=6, height=180,
+                                     object_fit="cover", preview=False, allow_preview=False)
+        c["bin_picked"] = gr.State(None)
+        with gr.Row():
+            c["bin_kind"] = gr.Radio(["auto", "Video", "Audio"], value="auto",
+                                    label="Add to track", scale=1)
+            c["bin_add_tl"] = gr.Button("➕ Add to timeline", variant="primary",
+                                       scale=1, elem_classes="reel2reel-prim")
+            c["bin_remove"] = gr.Button("✖ Remove", scale=1)
+
+    # --- global outputs browser ---
+    gr.Markdown("#### Outputs browser\nNewest first, from the Wan2GP outputs folder "
+                "(and your renders).")
     with gr.Row():
         c["refresh"] = gr.Button("🔄 Refresh", scale=0)
         c["kind"] = gr.Radio(["auto", "Video", "Audio"], value="auto",
                              label="Add to track", scale=1)
         c["add"] = gr.Button("➕ Add to timeline", variant="primary", scale=1,
                             elem_classes="reel2reel-prim")
-    c["gallery"] = gr.Gallery(label="Outputs", columns=4, height=420,
+        c["add_gbin"] = gr.Button("🌐 To global", scale=1)
+        c["add_pbin"] = gr.Button("📦 To project", scale=1)
+    c["gallery"] = gr.Gallery(label="Outputs", columns=4, height=360,
                              object_fit="cover", preview=False,
                              elem_classes="reel2reel-gallery", allow_preview=False)
-    c["picked"] = gr.State(None)       # absolute path of the selected library item
+    c["picked"] = gr.State(None)       # absolute path of the selected output
     c["status"] = gr.Markdown("")
     return c
 
@@ -87,12 +116,28 @@ def _timeline() -> dict:
             c["trk_up"] = gr.Button("▲ Up")
             c["trk_down"] = gr.Button("▼ Down")
 
-    with gr.Row():
-        c["proj_name"] = gr.Textbox(label="Project", value="Cut 1", scale=2)
-        c["new"] = gr.Button("New", scale=0)
-        c["save"] = gr.Button("💾 Save", scale=0)
-        c["load_name"] = gr.Dropdown(label="Open project", choices=[], scale=2)
-        c["load"] = gr.Button("Open", scale=0)
+    with gr.Accordion("📁 Project — save · versions", open=False):
+        c["current_lbl"] = gr.Markdown("*No project open — use **Save as** to name one.*")
+        with gr.Row():
+            c["proj_dd"] = gr.Dropdown(label="Open project", choices=[], scale=2)
+            c["open"] = gr.Button("Open", scale=0)
+            c["delete"] = gr.Button("🗑 Delete", scale=0)
+        c["proj_name"] = gr.Textbox(label="Name (for New / Save as / Rename / Duplicate)",
+                                    scale=2)
+        with gr.Row():
+            c["new"] = gr.Button("New")
+            c["save"] = gr.Button("💾 Save")
+            c["saveas"] = gr.Button("Save as")
+            c["rename"] = gr.Button("Rename")
+            c["dup"] = gr.Button("Duplicate")
+        gr.Markdown("**Versions** — manual named snapshots")
+        with gr.Row():
+            c["ver_label"] = gr.Textbox(label="Snapshot name", scale=2)
+            c["snapshot"] = gr.Button("📸 Snapshot")
+        with gr.Row():
+            c["ver_dd"] = gr.Dropdown(label="Versions", choices=[], scale=2)
+            c["restore"] = gr.Button("Restore")
+            c["delver"] = gr.Button("Delete version")
     c["status"] = gr.Markdown("")
     return c
 
