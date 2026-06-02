@@ -17,43 +17,47 @@ MODES = ("timeline", "render")   # 'library' is now a collapsible rail inside th
 
 
 def _library() -> dict:
+    """The Library rail: three thumbnail drawers (Outputs / Project / Global), each with
+    its own upload, a shared caption + refresh, and a kind-aware preview pane below.
+    There is NO action bar — actions live on the thumbnails: right-click for the menu
+    (Add to timeline / copy to a bin / remove + the cross-plugin items), or drag a
+    thumbnail onto a track / blank canvas. Decoration + DnD live in timeline.js; the
+    relay verbs (libadd / libpbin / libgbin / librm / libdrop) are handled in _on_ctx."""
     c = {"mode": "library"}
 
-    def _bin(label):
-        # narrow now — the library is a left rail, not a full page
-        return gr.Gallery(columns=2, height=260, object_fit="cover", preview=False,
-                          allow_preview=False, show_label=False,
-                          elem_classes="reel2reel-gallery", label=label)
+    def _bin(elem_id):     # narrow drawer — the library is a left rail
+        return gr.Gallery(columns=2, height=240, object_fit="cover", preview=False,
+                          allow_preview=False, show_label=False, elem_id=elem_id,
+                          elem_classes="reel2reel-gallery")
 
-    # One source-switcher → three uniform galleries, all feeding ONE shared picker.
+    with gr.Row(elem_id="reel2reel-lib-head"):
+        c["lib_selected"] = gr.Markdown("*Right-click a thumbnail for actions, or drag it "
+                                        "onto a track. Press **B** to hide this panel.*")
+        c["refresh"] = gr.Button("🔄", scale=0, min_width=34, elem_id="reel2reel-lib-refresh")
+
     with gr.Tabs(elem_id="reel2reel-lib-tabs"):
         with gr.Tab("🎞 Outputs"):
-            gr.Markdown("Newest first, from the Wan2GP outputs folder (and your renders).")
-            c["gallery"] = _bin("Outputs")
-        with gr.Tab("📦 Project bin"):
-            gr.Markdown("Media saved with the open project. Right-click any clip in the "
-                        "app → *Reel2Reel Library (project)* to drop it here.")
-            c["bin_gallery"] = _bin("Project bin")
-        with gr.Tab("🌐 Global bin"):
-            gr.Markdown("Reusable across every project. Right-click → "
-                        "*Reel2Reel Library (global)*.")
-            c["global_gallery"] = _bin("Global bin")
+            c["gallery"] = _bin("r2r-bin-outputs")
+            c["up_outputs"] = gr.UploadButton("⬆ Import a file", size="sm",
+                                             file_count="single")
+        with gr.Tab("📦 Project"):
+            c["bin_gallery"] = _bin("r2r-bin-pbin")
+            c["up_pbin"] = gr.UploadButton("⬆ Add to project bin", size="sm",
+                                          file_count="single")
+        with gr.Tab("🌐 Global"):
+            c["global_gallery"] = _bin("r2r-bin-gbin")
+            c["up_gbin"] = gr.UploadButton("⬆ Add to global bin", size="sm",
+                                          file_count="single")
 
-    # One action bar for whatever is selected, regardless of source tab.
-    with gr.Row(elem_id="reel2reel-lib-actions"):
-        c["lib_selected"] = gr.Markdown("*No clip selected*")
-        c["kind"] = gr.Radio(["auto", "Video", "Audio"], value="auto", label="Add as",
-                             scale=0)
-        c["add"] = gr.Button("➕ Add to timeline", variant="primary", scale=0,
-                            elem_classes="reel2reel-prim")
-        c["add_pbin"] = gr.Button("📦 To project", scale=0)
-        c["add_gbin"] = gr.Button("🌐 To global", scale=0)
-        c["refresh"] = gr.Button("🔄 Refresh", scale=0)
-    with gr.Row(elem_classes="reel2reel-lib-danger"):
-        c["bin_remove"] = gr.Button("Remove from project", scale=0)
-        c["global_remove"] = gr.Button("Remove from global", scale=0)
+    # Preview pane — drawer-width; shows whichever component matches the selection.
+    with gr.Group(elem_id="reel2reel-lib-preview"):
+        c["prev_empty"] = gr.Markdown("*Select a clip to preview it here.*")
+        c["prev_img"] = gr.Image(visible=False, show_label=False, interactive=False)
+        c["prev_vid"] = gr.Video(visible=False, show_label=False, interactive=False)
+        c["prev_aud"] = gr.Audio(visible=False, show_label=False, interactive=False)
+
     c["picked"] = gr.State(None)       # absolute path of the selected clip (any source)
-    c["status"] = gr.Markdown("")
+    c["status"] = gr.Markdown("", visible=False)   # kept for _on_ctx / settings rescan
     return c
 
 

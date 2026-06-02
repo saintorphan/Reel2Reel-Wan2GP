@@ -636,6 +636,56 @@
     }
   }
   function ensureChrome() { ensureInsChrome(); ensureLibChrome(); }
+  // ---- library bins: make thumbnails a menu surface + drag source, and let the
+  //      canvas accept drops (onto a track, or blank space = a new track of its kind) ----
+  var LIB_BINS = { "r2r-bin-outputs": "outputs", "r2r-bin-pbin": "pbin", "r2r-bin-gbin": "gbin" };
+  function decorateLib() {
+    Object.keys(LIB_BINS).forEach(function (gid) {
+      var g = document.getElementById(gid); if (!g) return;
+      var bin = LIB_BINS[gid], items = g.querySelectorAll(".thumbnail-item");
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        it.classList.add("r2r-lib-thumb");          // SaintorphanMenu surface
+        it.setAttribute("data-bin", bin);
+        it.setAttribute("data-idx", i);             // display index → server path
+        var img = it.querySelector("img");
+        if (img) it.setAttribute("data-media-src", img.currentSrc || img.src || "");
+        if (!it._r2rDrag) {
+          it._r2rDrag = true;
+          it.setAttribute("draggable", "true");
+          it.addEventListener("dragstart", function (e) {
+            var t = e.currentTarget;
+            S.libDrag = { bin: t.getAttribute("data-bin"), idx: t.getAttribute("data-idx") };
+            try { e.dataTransfer.setData("text/plain", "r2rlib"); e.dataTransfer.effectAllowed = "copy"; } catch (x) {}
+          });
+          it.addEventListener("dragend", function () { S.libDrag = null; });
+        }
+      }
+    });
+  }
+  function wireLibDrop() {
+    var sc = S.root && S.root.querySelector(".r2r-scroll");
+    if (!sc || sc._r2rDrop) return;
+    sc._r2rDrop = true;
+    sc.addEventListener("dragover", function (e) {
+      if (!S.libDrag) return;
+      e.preventDefault(); e.dataTransfer.dropEffect = "copy"; sc.classList.add("r2r-drop-on");
+    });
+    sc.addEventListener("dragleave", function (e) { if (e.target === sc) sc.classList.remove("r2r-drop-on"); });
+    sc.addEventListener("drop", function (e) {
+      sc.classList.remove("r2r-drop-on");
+      if (!S.libDrag) return;
+      e.preventDefault();
+      var bin = S.libDrag.bin, idx = S.libDrag.idx; S.libDrag = null;
+      var track = laneAt(e.clientY) || "NEW";       // lane under cursor, else a new track
+      var ref = S.lanes && S.lanes.querySelector(".r2r-lane");   // any lane = time-0 origin
+      var t = ref ? Math.max(0, px2sec(e.clientX - ref.getBoundingClientRect().left)) : 0;
+      relayCtx("libdrop|" + bin + "|" + idx + "|" + track + "|" + t.toFixed(3));
+    });
+  }
+  function libTick() { decorateLib(); wireLibDrop(); }
+  var _libT = null;
+  function scheduleLibTick() { if (_libT) clearTimeout(_libT); _libT = setTimeout(libTick, 80); }
   function syncSnapBox() {
     var b = S.root && S.root.querySelector('[data-act="snap"]');
     if (b) b.classList.toggle("active", S.snap);
@@ -823,6 +873,7 @@
   }
   function boot() {
     tryMount();
+    libTick();
     var tries = 0;
     (function poll() { if (S.mounted || tries++ > 80) return;
       requestAnimationFrame(function () { tryMount(); setTimeout(poll, 100); }); })();
@@ -830,6 +881,7 @@
       new MutationObserver(function () {
         var root = document.getElementById(ROOT_ID);
         if (root && !root.querySelector(".r2r-tl")) { S.mounted = false; tryMount(); }
+        scheduleLibTick();    // re-tag bin thumbnails + (re)wire drop after any DOM change
       }).observe(document.body, { childList: true, subtree: true });
     } catch (e) {}
     window.addEventListener("keydown", onKey, true);

@@ -122,7 +122,18 @@ _CTX_MENU_JS = (
     "M.register('.r2r-timeline-clip','Split at playhead',function(el){relay('csplit|'+rid(el));});"
     "M.register('.r2r-timeline-clip','Duplicate',function(el){relay('cdup|'+rid(el));});"
     "M.register('.r2r-timeline-clip','Detach audio',function(el){relay('cdetach|'+rid(el));});"
-    "M.register('.r2r-timeline-clip','Delete clip',function(el){relay('cdel|'+rid(el));});}"
+    "M.register('.r2r-timeline-clip','Delete clip',function(el){relay('cdel|'+rid(el));});"
+    # Library thumbnails (.r2r-lib-thumb, decorated in timeline.js) carry data-bin +
+    # data-idx; our items resolve those server-side. The cross-plugin 'image'/'video'
+    # items (Replicant Reference, etc.) attach to the same <img> automatically.
+    "var lib=function(v){return function(el){var b=el.getAttribute('data-bin'),"
+    "i=el.getAttribute('data-idx');if(b!=null&&i!=null)relay(v+'|'+b+'|'+i);};};"
+    "M.register('.r2r-lib-thumb','➕ Add to timeline',lib('libadd'));"
+    "M.register('.r2r-lib-thumb','📦 Copy to project bin',lib('libpbin'));"
+    "M.register('.r2r-lib-thumb','🌐 Copy to global bin',lib('libgbin'));"
+    "M.register('.r2r-lib-thumb','✖ Remove from this bin',function(el){"
+    "var b=el.getAttribute('data-bin'),i=el.getAttribute('data-idx');"
+    "if((b==='pbin'||b==='gbin')&&i!=null)relay('librm|'+b+'|'+i);});}"
     "})()\">")
 
 
@@ -384,6 +395,41 @@ class Reel2Reel(WAN2GPPlugin):
             clip.thumb = None
         return clip
 
+    def _ingest_at(self, path, track_id=None, start=None, force_kind="auto"):
+        """Like _ingest_clip but place the clip at a dropped (track, start). The file's
+        own kind wins: an audio file always lands on an audio track (the requested one
+        if it matches, else first/new of that kind); track_id="NEW" forces a new track."""
+        if not path or not Path(path).exists():
+            return None
+        k = discovery.kind_of(path) or "video"
+        need = "Audio" if (k == "audio" or force_kind == "Audio") else "Video"
+        info = discovery.probe_clip(path, getattr(self, "get_video_info", None))
+        if not any(t.clips for t in self._project.tracks):
+            if info.get("fps"):
+                self._project.fps = _snap_fps(info["fps"])
+            if info.get("width") and info.get("height"):
+                self._project.width = int(info["width"])
+                self._project.height = int(info["height"])
+        if track_id == "NEW":
+            track = self._project.add_track(need)
+        else:
+            t = self._project.get_track(track_id) if track_id else None
+            track = t if (t and t.kind == need) else \
+                (self._project.first_track(need) or self._project.add_track(need))
+        st = float(start) if start is not None else \
+            max((c.end for c in track.clips), default=0.0)
+        dur = info.get("dur") or 5.0
+        clip = timeline.Clip(id=self._project._fresh_id("c"), src=str(path),
+                             start=max(0.0, st), in_=0.0, out=float(dur), track=track.id,
+                             label=Path(path).stem, src_dur=info.get("dur"),
+                             src_fps=info.get("fps"), has_audio=bool(info.get("has_audio")))
+        self._project.add_clip(clip, track.id)
+        try:
+            clip.thumb = self._thumb_for(clip, "audio" if need == "Audio" else k)
+        except Exception:
+            clip.thumb = None
+        return clip
+
     # -- wiring -------------------------------------------------------------
     def _wire(self, ui):
         pages = ui["pages"]
@@ -451,7 +497,54 @@ class Reel2Reel(WAN2GPPlugin):
             elif cmd in ("csplit", "cdel", "cdup", "cdetach", "copy", "cut", "paste",
                          "delsel", "razor"):
                 upd["status"] = self._clip_action(cmd, payload, upd)
+            elif cmd in ("libadd", "libdrop", "libpbin", "libgbin", "librm"):
+                upd["status"] = self._lib_action(cmd, payload, upd)
         return upd[names[0]] if len(names) == 1 else tuple(upd[n] for n in names)
+
+    def _lib_action(self, cmd, payload, upd):
+        """Library thumbnail actions, relayed from the right-click menu / drag-drop.
+        payload = "bin|idx[|track|time]"; bin∈{outputs,pbin,gbin}, idx is the thumb's
+        display index. 'tl'/'bin'/'global' updates are written into upd in place."""
+        args = payload.split("|")
+        bin_name = args[0] if args else ""
+        path = self._lib_path(bin_name, args[1] if len(args) > 1 else "")
+        if not path:
+            return "Couldn't resolve that thumbnail to a file."
+        name = Path(path).name
+        if cmd == "libadd":
+            self._push_undo(); self._ingest_clip(path)
+            upd["tl"] = self._env_after(); gr.Info(f"Added {name} to the timeline.")
+            return f"Added **{name}** to the timeline."
+        if cmd == "libdrop":
+            track = args[2] if len(args) > 2 else "NEW"
+            t = args[3] if len(args) > 3 and args[3] not in ("", "None") else None
+            self._push_undo(); self._ingest_at(path, track_id=track, start=t)
+            upd["tl"] = self._env_after()
+            return f"Dropped **{name}** onto the timeline."
+        if cmd == "libpbin":
+            self._bin = self._dedup(self._bin + [path])
+            if self._project_name:
+                projects.set_bin(self._project_name, self._bin)
+            upd["bin"] = self._bin_value(); gr.Info("Added to the project bin.")
+            return f"Added **{name}** to the project bin."
+        if cmd == "libgbin":
+            self._gbin = self._dedup(self._gbin + [path]); projects.set_global_bin(self._gbin)
+            upd["global"] = self._gbin_value(); gr.Info("Added to the global bin.")
+            return f"Added **{name}** to the global library."
+        if cmd == "librm":
+            if bin_name == "pbin":
+                self._bin = [p for p in self._bin if p != path]
+                if self._project_name:
+                    projects.set_bin(self._project_name, self._bin)
+                upd["bin"] = self._bin_value()
+            elif bin_name == "gbin":
+                self._gbin = [p for p in self._gbin if p != path]
+                projects.set_global_bin(self._gbin)
+                upd["global"] = self._gbin_value()
+            else:
+                return "Outputs are read-only — nothing to remove."
+            return f"Removed **{name}**."
+        return ""
 
     def _clip_action(self, cmd, payload, upd):
         """Per-clip context-menu actions + clipboard, relayed from the timeline."""
@@ -604,42 +697,76 @@ class Reel2Reel(WAN2GPPlugin):
 
     # -- library ------------------------------------------------------------
     def _wire_library(self, c, subtabs):
-        # All three source galleries feed ONE shared picker; the single action bar
-        # then operates on whatever is selected, regardless of the active source tab.
-        c["refresh"].click(self._refresh_library, outputs=[c["gallery"], c["status"]])
+        # All three drawers feed ONE shared picker; selection drives the caption + the
+        # kind-aware preview pane. Actions (add / copy-to-bin / remove) are on the
+        # thumbnails via the right-click relay; per-bin uploads import new media.
+        c["refresh"].click(self._refresh_library, outputs=[c["gallery"], c["lib_selected"]])
         c["gallery"].select(self._on_pick, outputs=[c["picked"]])
         c["bin_gallery"].select(self._bin_pick, outputs=[c["picked"]])
         c["global_gallery"].select(self._gbin_pick, outputs=[c["picked"]])
-        c["picked"].change(
-            lambda p: f"**{Path(p).name}**" if p else "*No clip selected*",
-            inputs=[c["picked"]], outputs=[c["lib_selected"]])
-        c["add"].click(self._add_to_timeline, inputs=[c["picked"], c["kind"]],
-                      outputs=[self.tl_from_py, subtabs, self.trk_dd, c["status"]])
-        c["add_gbin"].click(self._add_to_global, inputs=[c["picked"]],
-                           outputs=[c["global_gallery"], c["status"]])
-        c["add_pbin"].click(self._add_to_project_bin, inputs=[c["picked"]],
-                           outputs=[c["bin_gallery"], c["status"]])
-        c["bin_remove"].click(self._bin_remove, inputs=[c["picked"]],
-                             outputs=[c["bin_gallery"], c["picked"], c["status"]])
-        c["global_remove"].click(self._gbin_remove, inputs=[c["picked"]],
-                                outputs=[c["global_gallery"], c["picked"], c["status"]])
+        c["picked"].change(self._lib_select, inputs=[c["picked"]],
+                          outputs=[c["lib_selected"], c["prev_empty"], c["prev_img"],
+                                   c["prev_vid"], c["prev_aud"]])
+        c["up_outputs"].upload(lambda f: self._lib_upload(f, "outputs"),
+                              inputs=[c["up_outputs"]], outputs=[c["gallery"], c["lib_selected"]])
+        c["up_pbin"].upload(lambda f: self._lib_upload(f, "pbin"),
+                           inputs=[c["up_pbin"]], outputs=[c["bin_gallery"], c["lib_selected"]])
+        c["up_gbin"].upload(lambda f: self._lib_upload(f, "gbin"),
+                           inputs=[c["up_gbin"]], outputs=[c["global_gallery"], c["lib_selected"]])
 
-    # -- media bins ---------------------------------------------------------
-    def _add_to_global(self, picked):
-        if not picked:
-            raise gr.Error("Select an output first.")
-        self._gbin = self._dedup(self._gbin + [picked])
-        projects.set_global_bin(self._gbin)
-        return self._gbin_value(), f"Added **{Path(picked).name}** to the global library."
+    def _lib_select(self, path):
+        """Selection → caption + show the one preview component that matches the kind."""
+        if not path:
+            return (gr.update(value="*Right-click a thumbnail for actions, or drag it onto "
+                                    "a track. Press **B** to hide this panel.*"),
+                    gr.update(visible=True),
+                    gr.update(visible=False, value=None), gr.update(visible=False, value=None),
+                    gr.update(visible=False, value=None))
+        k = discovery.kind_of(path) or "video"
+        return (gr.update(value=f"**{Path(path).name}**  ·  {k}"),
+                gr.update(visible=False),
+                gr.update(visible=(k == "image"), value=path if k == "image" else None),
+                gr.update(visible=(k == "video"), value=path if k == "video" else None),
+                gr.update(visible=(k == "audio"), value=path if k == "audio" else None))
 
-    def _add_to_project_bin(self, picked):
-        if not picked:
-            raise gr.Error("Select an output first.")
-        self._bin = self._dedup(self._bin + [picked])
-        if self._project_name:
-            projects.set_bin(self._project_name, self._bin)
-        return self._bin_value(), f"Added **{Path(picked).name}** to the project bin."
+    def _lib_path(self, bin_name, idx):
+        """(bin, display-index) → absolute source path, from the ordered per-bin views."""
+        src = {"outputs": getattr(self, "_library", None),
+               "pbin": getattr(self, "_bin_view", None),
+               "gbin": getattr(self, "_gbin_view", None)}.get(bin_name)
+        try:
+            return src[int(idx)]["path"]
+        except Exception:
+            return None
 
+    def _lib_upload(self, f, which):
+        """Import an uploaded file into a bin (copied into renders_dir so it persists)."""
+        import shutil
+        src = f if isinstance(f, str) else getattr(f, "name", None)
+        if not src or not Path(src).exists():
+            return gr.update(), gr.update(value="Upload failed — no file received.")
+        dest = paths.renders_dir() / Path(src).name
+        try:
+            paths.renders_dir().mkdir(parents=True, exist_ok=True)
+            if str(Path(src).resolve()) != str(dest.resolve()):
+                shutil.copy2(src, dest)
+            path = str(dest)
+        except Exception:
+            path = src
+        name = Path(path).name
+        if which == "gbin":
+            self._gbin = self._dedup(self._gbin + [path]); projects.set_global_bin(self._gbin)
+            return self._gbin_value(), gr.update(value=f"Imported **{name}** to the global bin.")
+        if which == "pbin":
+            self._bin = self._dedup(self._bin + [path])
+            if self._project_name:
+                projects.set_bin(self._project_name, self._bin)
+            return self._bin_value(), gr.update(value=f"Imported **{name}** to the project bin.")
+        g, _ = self._refresh_library()      # outputs: it now lives in renders_dir → rescan
+        return g, gr.update(value=f"Imported **{name}**.")
+
+    # -- media bins (add / copy / remove are now thumbnail right-click verbs:
+    #    see _lib_action; these just resolve gallery selections to a picked path) ------
     def _bin_pick(self, evt: gr.SelectData):
         try:
             return self._bin_view[evt.index]["path"]
@@ -651,21 +778,6 @@ class Reel2Reel(WAN2GPPlugin):
             return self._gbin_view[evt.index]["path"]
         except Exception:
             return None
-
-    def _bin_remove(self, picked):
-        if not picked:
-            raise gr.Error("Pick a project-bin item first.")
-        self._bin = [p for p in self._bin if p != picked]
-        if self._project_name:
-            projects.set_bin(self._project_name, self._bin)
-        return self._bin_value(), None, "Removed from the project bin."
-
-    def _gbin_remove(self, picked):
-        if not picked:
-            raise gr.Error("Pick a global-library item first.")
-        self._gbin = [p for p in self._gbin if p != picked]
-        projects.set_global_bin(self._gbin)
-        return self._gbin_value(), None, "Removed from the global library."
 
     def _refresh_library(self):
         self._library = []
@@ -685,15 +797,6 @@ class Reel2Reel(WAN2GPPlugin):
             return self._library[evt.index]["path"]
         except Exception:
             return None
-
-    def _add_to_timeline(self, picked, kind):
-        if not picked:
-            raise gr.Error("Select a clip in the Library first.")
-        self._push_undo()
-        self._ingest_clip(picked, force_kind=kind if kind in ("Video", "Audio") else "auto")
-        return (self._env_after(), gr.update(selected=suite._TAB_IDS["timeline"]),
-                gr.update(choices=self._track_choices()),
-                f"Added **{Path(picked).stem}** to the timeline.")
 
     # -- timeline: bridge persist + inspectors + toolbar --------------------
     def _wire_timeline(self, c):

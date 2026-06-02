@@ -73,14 +73,26 @@ button.reel2reel-tabbtn {{ border: 2px solid #2ea043 !important; border-radius: 
     user-select: none; }}
 #r2r-stage.r2r-lib-collapsed #r2r-lib-reveal {{ display: flex; }}
 
-/* ---- library: uniform galleries, one action bar, thin danger row ---- */
+/* ---- library rail: drawers + caption + preview pane (no action bar) ---- */
 #reel2reel-root .reel2reel-gallery .thumbnail-item img {{ object-fit: cover; }}
-#reel2reel-lib-actions {{ align-items: center; gap: 8px; padding: 8px 10px; margin-top: 6px;
-    border: 1px solid var(--border-color-primary); border-radius: 10px; }}
-#reel2reel-lib-actions .prose p {{ margin: 0; opacity: .85; font-size: 13px; }}
-.reel2reel-lib-danger {{ justify-content: flex-end; opacity: .85; }}
-.reel2reel-lib-danger button {{ color: #c0392b; }}
 #reel2reel-lib-tabs .tab-nav {{ padding-left: 34px !important; }}  /* clear #r2r-lib-close */
+#reel2reel-lib-head {{ align-items: center; gap: 6px; margin-bottom: 4px; flex-wrap: nowrap; }}
+#reel2reel-lib-head .prose p {{ margin: 0; font-size: 12px; opacity: .9;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+#reel2reel-lib-refresh {{ min-width: 34px; padding: 2px 8px; }}
+/* thumbnails: draggable onto the canvas */
+.reel2reel-gallery .thumbnail-item.r2r-lib-thumb {{ cursor: grab; }}
+.reel2reel-gallery .thumbnail-item.r2r-lib-thumb:active {{ cursor: grabbing; }}
+/* drop affordance on the timeline scroll area while dragging a thumbnail */
+.r2r-tl .r2r-scroll.r2r-drop-on {{ outline: 2px dashed {_ACCENT}; outline-offset: -3px;
+    background: rgba(224,161,6,0.06); }}
+/* kind-aware preview pane — drawer width */
+#reel2reel-lib-preview {{ margin-top: 8px; border: 1px solid {_ACCENT_DK}; border-radius: 8px;
+    padding: 6px; background: #15161a; }}
+#reel2reel-lib-preview .prose p {{ margin: 0; font-size: 12px; opacity: .7; text-align: center;
+    padding: 14px 4px; }}
+#reel2reel-lib-preview img, #reel2reel-lib-preview video {{ width: 100%; max-height: 34vh;
+    object-fit: contain; background: #000; border-radius: 6px; }}
 
 /* ---- render: compact controls + big sticky preview ---- */
 #reel2reel-root #r2r-render-controls {{ max-width: 380px; }}
