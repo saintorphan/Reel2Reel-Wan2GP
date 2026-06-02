@@ -45,19 +45,38 @@
 .r2r-tl .r2r-lanes { position: relative; }
 .r2r-tl .r2r-track { display: flex; align-items: stretch; height: 52px; }
 .r2r-tl .r2r-head {
-  width: 96px; min-width: 96px; display: flex; flex-direction: column;
-  justify-content: center; gap: 1px;
+  position: relative;
+  width: 112px; min-width: 112px; display: flex; flex-direction: column;
+  justify-content: center; gap: 3px;
   padding: 0 8px; color: #c9c6bf; background: #1a1c22;
   border-right: 1px solid var(--r2r-edge); border-bottom: 1px solid var(--r2r-edge);
   overflow: hidden; white-space: nowrap;
 }
-.r2r-tl .r2r-head span { overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
-.r2r-tl .r2r-head small { color: #7f8490; font-size: 9px; }
+.r2r-tl .r2r-trk-name {
+  overflow: hidden; text-overflow: ellipsis; font-weight: 600; cursor: text;
+  padding-right: 16px;                 /* clear the absolute collapse caret */
+}
 .r2r-tl .r2r-collapse {
   position: absolute; top: 2px; right: 4px; width: 16px; height: 16px; padding: 0;
   background: transparent; color: #8b8f99; border: 0; cursor: pointer; font-size: 10px;
 }
-.r2r-tl .r2r-head { position: relative; }
+/* meta row: kind label + M/S/L toggle buttons */
+.r2r-tl .r2r-trk-ctrl { display: flex; align-items: center; gap: 3px; }
+.r2r-tl .r2r-trk-ctrl small { color: #7f8490; font-size: 9px; margin-right: 1px; }
+.r2r-tl .r2r-trk-flag {
+  width: 16px; height: 15px; padding: 0; font-size: 9px; font-weight: 700; line-height: 1;
+  background: #23262e; color: #8b8f99; border: 1px solid var(--r2r-edge);
+  border-radius: 3px; cursor: pointer;
+}
+.r2r-tl .r2r-trk-flag:hover { color: #fff; border-color: var(--r2r-amber-dk); }
+.r2r-tl .r2r-trk-flag.active {
+  background: var(--r2r-amber); color: #1a1405; border-color: var(--r2r-amber-dk);
+}
+.r2r-tl .r2r-trk-vol { width: 100%; accent-color: var(--r2r-amber); height: 10px; margin: 0; }
+.r2r-tl .r2r-trk-rename {
+  width: 100%; font: inherit; font-weight: 600; background: #0e0f12; color: #fff;
+  border: 1px solid var(--r2r-amber-dk); border-radius: 3px; padding: 0 3px; box-sizing: border-box;
+}
 .r2r-tl .r2r-trk-resize {
   position: absolute; left: 0; right: 0; bottom: 0; height: 5px; cursor: ns-resize;
 }
@@ -65,6 +84,19 @@
 .r2r-tl .r2r-empty {
   padding: 30px 20px; text-align: center; color: #8b8f99; font-size: 13px; line-height: 1.6;
 }
+/* right-click track-head menu (appended to <body>, so not scoped under .r2r-tl) */
+.r2r-trk-menu {
+  position: fixed; z-index: 100001; background: #15161a; border: 1px solid #3a3d46;
+  border-radius: 8px; padding: 4px; display: flex; flex-direction: column;
+  min-width: 154px; box-shadow: 0 6px 24px rgba(0,0,0,0.5);
+}
+.r2r-trk-menu button {
+  text-align: left; background: transparent; color: #e9e6df; border: 0;
+  border-radius: 5px; padding: 6px 10px; font-size: 12px; cursor: pointer;
+}
+.r2r-trk-menu button:hover:not(:disabled) { background: #23262e; }
+.r2r-trk-menu button:disabled { color: #5a5e68; cursor: default; }
+.r2r-trk-menu-sep { height: 1px; background: #3a3d46; margin: 4px 6px; }
 
 .r2r-tl .r2r-help {
   background: transparent; color: #c9c6bf; border: 1px solid var(--r2r-edge);

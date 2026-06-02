@@ -73,6 +73,10 @@ def _timeline() -> dict:
         c["add_marker"] = gr.Button("🚩 Marker", scale=0, elem_id="r2r-marker")
         c["add_video"] = gr.Button("➕ Video track", scale=0, elem_id="r2r-addv")
         c["add_audio"] = gr.Button("➕ Audio track", scale=0, elem_id="r2r-adda")
+        # Track management lives on the timeline track heads now (inline M/S/L,
+        # double-click rename, right-click menu). trk_dd stays here, hidden, only
+        # because many handlers refresh their track-choices into it.
+        c["trk_dd"] = gr.Dropdown(label="Track", choices=[])
 
     # #r2r-stage is the STABLE host for the collapse state + injected >>/reveal chrome
     # (Gradio re-renders the inspector's children on every tl_to_py.change, so chrome
@@ -140,22 +144,9 @@ def _timeline() -> dict:
                         c["trans_add"] = gr.Button("⇆ Add")
                         c["trans_rm"] = gr.Button("Remove")
 
-    with gr.Accordion("Tracks", open=False):
-        c["trk_dd"] = gr.Dropdown(label="Track", choices=[])
-        c["trk_name"] = gr.Textbox(label="Track name")
-        c["trk_volume"] = gr.Slider(-40, 12, value=0, step=0.5, label="Track volume (dB, audio)")
-        with gr.Row():
-            c["trk_mute"] = gr.Checkbox(label="Mute")
-            c["trk_solo"] = gr.Checkbox(label="Solo")
-            c["trk_lock"] = gr.Checkbox(label="Lock")
-        with gr.Row():
-            c["trk_apply"] = gr.Button("Apply to track", variant="primary",
-                                       elem_classes="reel2reel-prim")
-            c["trk_del"] = gr.Button("Delete track")
-            c["trk_up"] = gr.Button("▲ Up")
-            c["trk_down"] = gr.Button("▼ Down")
-
-    # Project / version CRUD now lives in the persistent suite-level bar (above the
+    # Track management (rename / mute / solo / lock / volume / delete / reorder)
+    # is on the track heads in the timeline canvas — see assets/static/timeline.js.
+    # Project / version CRUD lives in the persistent suite-level bar (above the
     # sub-tabs, visible on every page) — see ui/suite.py _projbar().
     c["status"] = gr.Markdown("")
     return c

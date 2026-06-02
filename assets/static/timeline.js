@@ -102,22 +102,49 @@
       row.style.height = h + "px";
       var head = document.createElement("div");
       head.className = "r2r-head"; head.style.height = h + "px";
-      var flags = (t.muted ? " 🔇" : "") + (t.solo ? " ◎" : "") + (t.locked ? " 🔒" : "");
+      var isAudio = (t.kind || "Video") === "Audio";
       var btn = document.createElement("button");
       btn.className = "r2r-collapse"; btn.textContent = collapsed ? "▸" : "▾";
-      btn.title = "collapse / expand track";
+      btn.title = "Collapse / expand track";
       btn.addEventListener("click", function (ev) {
         ev.stopPropagation(); t.height = collapsed ? 0 : 1; renderAll(); commit();
       });
-      var nm = document.createElement("span"); nm.textContent = (t.name || t.id);
-      var sm = document.createElement("small"); sm.textContent = t.kind + flags;
-      head.appendChild(btn); head.appendChild(nm); head.appendChild(sm);
+      var nm = document.createElement("span");
+      nm.className = "r2r-trk-name"; nm.dataset.trk = t.id;
+      nm.textContent = (t.name || t.id); nm.title = "Double-click to rename · right-click for more";
+      nm.addEventListener("dblclick", function (ev) { ev.stopPropagation(); renameTrack(t); });
+      var ctrl = document.createElement("div"); ctrl.className = "r2r-trk-ctrl";
+      var sm = document.createElement("small"); sm.textContent = t.kind; ctrl.appendChild(sm);
+      [["muted", "M", "Mute"], ["solo", "S", "Solo"], ["locked", "L", "Lock"]].forEach(function (f) {
+        var b = document.createElement("button");
+        b.className = "r2r-trk-flag" + (t[f[0]] ? " active" : "");
+        b.textContent = f[1]; b.title = f[2];
+        b.addEventListener("click", function (ev) {
+          ev.stopPropagation(); t[f[0]] = !t[f[0]]; renderAll(); commit();
+        });
+        ctrl.appendChild(b);
+      });
+      head.appendChild(btn); head.appendChild(nm); head.appendChild(ctrl);
+      if (!collapsed && isAudio) {                        // audio: inline volume on the head
+        var vol = document.createElement("input");
+        vol.type = "range"; vol.className = "r2r-trk-vol";
+        vol.min = -40; vol.max = 12; vol.step = 0.5;
+        vol.value = (t.volume_db != null ? t.volume_db : 0);
+        vol.title = "Track volume " + (t.volume_db || 0) + " dB";
+        vol.addEventListener("pointerdown", function (ev) { ev.stopPropagation(); });
+        vol.addEventListener("input", function () {
+          t.volume_db = parseFloat(vol.value); vol.title = "Track volume " + vol.value + " dB";
+        });
+        vol.addEventListener("change", function () { t.volume_db = parseFloat(vol.value); commit(); });
+        head.appendChild(vol);
+      }
       if (!collapsed) {
         var rsz = document.createElement("div");
-        rsz.className = "r2r-trk-resize"; rsz.title = "drag to resize track";
+        rsz.className = "r2r-trk-resize"; rsz.title = "Drag to resize track";
         wireTrackResize(rsz, t);
         head.appendChild(rsz);
       }
+      head.addEventListener("contextmenu", function (ev) { openTrackMenu(ev, t); });
       var lane = document.createElement("div");
       lane.className = "r2r-lane"; lane.dataset.track = t.id; lane.style.height = h + "px";
       if (!collapsed) {
@@ -161,6 +188,90 @@
         window.removeEventListener("pointermove", mv); commit();
       }, { once: true });
     });
+  }
+  // ---- track ops (client-side; persist through the same commit() payload) ----
+  function reindexTracks() { (S.edit.tracks || []).forEach(function (t, i) { t.index = i; }); }
+  function deleteTrack(id) {                       // mirrors timeline.remove_track
+    var ts = S.edit.tracks || [];
+    if (ts.length <= 1) return;                     // keep at least one track
+    var gone = {};
+    S.edit.clips = (S.edit.clips || []).filter(function (c) {
+      if (c.track === id) { gone[c.id] = 1; return false; } return true;
+    });
+    S.edit.tracks = ts.filter(function (t) { return t.id !== id; });
+    S.edit.transitions = (S.edit.transitions || []).filter(function (x) {
+      return x.track !== id && !(x.between && (gone[x.between[0]] || gone[x.between[1]]));
+    });
+    reindexTracks(); renderAll(); commit();
+  }
+  function moveTrack(id, delta) {                   // mirrors timeline.move_track
+    var ts = S.edit.tracks || [], i = -1;
+    for (var k = 0; k < ts.length; k++) if (ts[k].id === id) { i = k; break; }
+    if (i < 0) return;
+    var n = Math.max(0, Math.min(ts.length - 1, i + delta));
+    if (n === i) return;
+    ts.splice(n, 0, ts.splice(i, 1)[0]); reindexTracks(); renderAll(); commit();
+  }
+  function renameTrack(t) {                          // inline edit, in place on the head
+    var span = S.lanes && S.lanes.querySelector('.r2r-trk-name[data-trk="' + t.id + '"]');
+    if (!span) return;
+    var inp = document.createElement("input");
+    inp.className = "r2r-trk-rename"; inp.value = t.name || "";
+    span.replaceWith(inp); inp.focus(); inp.select();
+    var closed = false;
+    function done(save) {
+      if (closed) return; closed = true;
+      if (save) { var v = inp.value.trim(); if (v) { t.name = v; commit(); } }
+      renderAll();
+    }
+    inp.addEventListener("pointerdown", function (e) { e.stopPropagation(); });
+    inp.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); done(true); }
+      else if (e.key === "Escape") { e.preventDefault(); done(false); }
+    });
+    inp.addEventListener("blur", function () { done(true); });
+  }
+  function closeTrackMenu() {
+    var m = document.getElementById("r2r-trk-menu");
+    if (!m) return;
+    if (m._onDown) document.removeEventListener("pointerdown", m._onDown, true);
+    m.remove();
+  }
+  function openTrackMenu(ev, t) {
+    ev.preventDefault(); ev.stopPropagation(); closeTrackMenu();
+    var ts = S.edit.tracks || [], i = ts.indexOf(t);
+    var menu = document.createElement("div");
+    menu.className = "r2r-trk-menu"; menu.id = "r2r-trk-menu";
+    var items = [
+      ["Rename", function () { renameTrack(t); }],
+      ["Move up", function () { moveTrack(t.id, -1); }, i <= 0],
+      ["Move down", function () { moveTrack(t.id, 1); }, i >= ts.length - 1],
+      ["Delete track", function () { deleteTrack(t.id); }, ts.length <= 1],
+      ["sep"],
+      ["＋ Video track", function () { clickGr("r2r-addv"); }],
+      ["＋ Audio track", function () { clickGr("r2r-adda"); }]
+    ];
+    items.forEach(function (it) {
+      if (it[0] === "sep") {
+        var s = document.createElement("div"); s.className = "r2r-trk-menu-sep";
+        menu.appendChild(s); return;
+      }
+      var b = document.createElement("button"); b.textContent = it[0];
+      if (it[2]) { b.disabled = true; }
+      else { b.addEventListener("click", function () { closeTrackMenu(); it[1](); }); }
+      menu.appendChild(b);
+    });
+    document.body.appendChild(menu);
+    var mw = menu.offsetWidth, mh = menu.offsetHeight;
+    menu.style.left = Math.min(ev.clientX, window.innerWidth - mw - 6) + "px";
+    menu.style.top = Math.min(ev.clientY, window.innerHeight - mh - 6) + "px";
+    // Close on any press OUTSIDE the menu — containment check so a press on a menu
+    // item doesn't tear the menu down before its click lands.
+    menu._onDown = function (e) { if (!menu.contains(e.target)) closeTrackMenu(); };
+    setTimeout(function () {
+      document.addEventListener("pointerdown", menu._onDown, true);
+      window.addEventListener("blur", closeTrackMenu, { once: true });
+    }, 0);
   }
   function laneAt(clientY) {
     var lanes = S.lanes ? S.lanes.querySelectorAll(".r2r-lane") : [];

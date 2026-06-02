@@ -740,22 +740,11 @@ class Reel2Reel(WAN2GPPlugin):
                        outputs=[self.tl_from_py, self.trk_dd, c["undo"], c["redo"], c["status"]])
         c["redo"].click(self._do_redo,
                        outputs=[self.tl_from_py, self.trk_dd, c["undo"], c["redo"], c["status"]])
-
-        # Track inspector
-        c["trk_dd"].change(self._load_track, inputs=[c["trk_dd"]],
-                          outputs=[c["trk_name"], c["trk_volume"], c["trk_mute"],
-                                   c["trk_solo"], c["trk_lock"]])
-        c["trk_apply"].click(
-            self._apply_track,
-            inputs=[c["trk_dd"], c["trk_name"], c["trk_volume"], c["trk_mute"],
-                    c["trk_solo"], c["trk_lock"]],
-            outputs=[self.tl_from_py, self.trk_dd, c["status"]])
-        c["trk_del"].click(self._delete_track, inputs=[c["trk_dd"]],
-                          outputs=[self.tl_from_py, self.trk_dd, c["status"]])
-        c["trk_up"].click(lambda t: self._move_track(t, -1), inputs=[c["trk_dd"]],
-                         outputs=[self.tl_from_py, self.trk_dd, c["status"]])
-        c["trk_down"].click(lambda t: self._move_track(t, 1), inputs=[c["trk_dd"]],
-                           outputs=[self.tl_from_py, self.trk_dd, c["status"]])
+        # Track rename / mute / solo / lock / volume / delete / reorder are handled
+        # entirely client-side on the track heads (timeline.js mutates S.edit + commits
+        # through the same payload channel as collapse/resize). trk_dd is kept only as a
+        # hidden choices sink for the handlers above. _add_track stays Python-side (it
+        # needs to mint a fresh track id) and fires from the +Video/+Audio toolbar buttons.
 
     def _wire_projects(self, bar):
         """Project CRUD + versioning + OTIO — now on the persistent suite-level bar.
@@ -1074,43 +1063,13 @@ class Reel2Reel(WAN2GPPlugin):
         return self._env_after(), msg
 
     # -- track ops ----------------------------------------------------------
+    # rename / mute / solo / lock / volume / delete / reorder are client-side on the
+    # track heads (timeline.js); only add-track stays here — it mints a fresh id.
     def _add_track(self, kind):
         self._push_undo()
         trk = self._project.add_track(kind, "")
         return (self._env_after(), gr.update(choices=self._track_choices(), value=trk.id),
                 f"Added track **{trk.name}**.")
-
-    def _load_track(self, track_id):
-        t = self._project.get_track(track_id)
-        if t is None:
-            return [gr.update()] * 5
-        return [gr.update(value=t.name), gr.update(value=t.volume_db),
-                gr.update(value=t.muted), gr.update(value=t.solo), gr.update(value=t.locked)]
-
-    def _apply_track(self, track_id, name, vol, mute, solo, lock):
-        if not track_id:
-            raise gr.Error("Pick a track first.")
-        self._push_undo()
-        self._project.set_track(track_id, name=name, volume_db=vol, muted=mute,
-                                solo=solo, locked=lock)
-        return (self._env_after(), gr.update(choices=self._track_choices(), value=track_id),
-                "Updated track.")
-
-    def _delete_track(self, track_id):
-        if not track_id:
-            raise gr.Error("Pick a track first.")
-        self._push_undo()
-        ok = self._project.remove_track(track_id)
-        msg = "Deleted track." if ok else "Can't delete the last track."
-        return self._env_after(), gr.update(choices=self._track_choices(), value=None), msg
-
-    def _move_track(self, track_id, delta):
-        if not track_id:
-            raise gr.Error("Pick a track first.")
-        self._push_undo()
-        self._project.move_track(track_id, delta)
-        return (self._env_after(), gr.update(choices=self._track_choices(), value=track_id),
-                "Reordered tracks.")
 
     def _undo_labels(self):
         """Button labels that surface how deep the undo / redo stacks are."""
