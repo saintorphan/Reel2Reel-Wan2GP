@@ -377,7 +377,7 @@ class Timeline:
         # invariants
         clip.in_ = max(0.0, clip.in_)
         clip.out = max(clip.in_ + 1.0 / max(1, self.fps), clip.out)
-        clip.speed = clip.speed_f
+        clip.speed = 1.0 if clip.type == "text" else clip.speed_f
         clip.fade_in = max(0.0, min(clip.fade_in, clip.dur))
         clip.fade_out = max(0.0, min(clip.fade_out, clip.dur))
         clip.opacity = max(0.0, min(1.0, clip.opacity))
@@ -396,6 +396,8 @@ class Timeline:
                                "in_": clip.in_ + src_off, "fade_in": 0.0})
                 clip.out = clip.in_ + src_off
                 clip.fade_out = 0.0
+                clip.fade_in = min(clip.fade_in, clip.dur)      # halves are shorter now
+                right.fade_out = min(right.fade_out, right.dur)
                 track.clips.append(right)
                 created.append(right.id)
         track.clips.sort(key=lambda c: c.start)
@@ -518,6 +520,7 @@ class Timeline:
                 c.in_ = max(0.0, _f(c.in_))
                 c.speed = c.speed_f
                 if c.type == "text":
+                    c.speed = 1.0                       # text clips ignore speed
                     c.out = max(minf, _f(c.out, minf))
                 else:
                     c.out = max(c.in_ + minf, _f(c.out))
@@ -530,7 +533,7 @@ class Timeline:
             _, b = self.find_clip(x.between[1])
             if a is None or b is None:
                 continue
-            x.duration = max(minf, min(x.duration, a.dur * 0.95, b.dur * 0.95))
+            x.duration = max(minf, min(x.duration, a.dur * 0.9, b.dur * 0.9))
             good.append(x)
         self.transitions = good
         return self

@@ -45,9 +45,13 @@ def to_otio(tl: "_tl.Timeline") -> dict:
                     "OTIO_SCHEMA": "ExternalReference.1",
                     "target_url": c.src,
                     "available_range": _range(0.0, c.src_dur or c.dur, rate)},
-                "source_range": _range(c.in_, c.dur, rate),
-                "metadata": {"reel2reel": {"id": c.id, "gain_db": c.gain_db,
-                                           "geometry": c.geometry}},
+                "source_range": _range(c.in_, c.src_len, rate),
+                "metadata": {"reel2reel": {
+                    "id": c.id, "type": c.type, "gain_db": c.gain_db,
+                    "geometry": c.geometry, "speed": c.speed, "reverse": c.reverse,
+                    "color": c.color, "text": c.text, "fade_in": c.fade_in,
+                    "fade_out": c.fade_out, "opacity": c.opacity, "mute": c.mute,
+                    "has_audio": c.has_audio}},
             })
             cursor = c.start + c.dur
         otio_tracks.append({
@@ -94,13 +98,21 @@ def from_otio(doc: dict) -> "_tl.Timeline":
                 id=rmeta.get("id") or _tl.new_id("c"),
                 src=mref.get("target_url", ""), start=cursor, in_=in_, out=in_ + dur,
                 track=track.id, label=child.get("name", ""),
+                type=rmeta.get("type", "media"),
                 gain_db=float(rmeta.get("gain_db", 0.0) or 0.0),
-                geometry=rmeta.get("geometry"))
+                geometry=rmeta.get("geometry"),
+                speed=float(rmeta.get("speed", 1.0) or 1.0),
+                reverse=bool(rmeta.get("reverse", False)), color=rmeta.get("color"),
+                text=rmeta.get("text"), fade_in=float(rmeta.get("fade_in", 0.0) or 0.0),
+                fade_out=float(rmeta.get("fade_out", 0.0) or 0.0),
+                opacity=float(rmeta.get("opacity", 1.0) or 1.0),
+                mute=bool(rmeta.get("mute", False)),
+                has_audio=bool(rmeta.get("has_audio", False)))
             track.clips.append(clip)
-            cursor += dur
+            cursor += clip.dur              # advance by on-timeline (speed-aware) length
     if not tl.tracks:
         tl.add_track("Video", "Video 1")
-    return tl
+    return tl.sanitize()
 
 
 # --- optional .otio file round-trip (needs the opentimelineio library) ------

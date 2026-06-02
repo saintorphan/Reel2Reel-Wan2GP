@@ -249,11 +249,14 @@ def test_model_extensions():
                                               between=("nope", "nope2"), duration=0.5))
     tl.sanitize()
     assert not any(x.id == "xbad" for x in tl.transitions)      # bad transition dropped
-    # round-trip with new fields
+    # round-trip with new fields (native doc + OTIO interchange)
     tl2 = timeline.from_document(timeline.to_document(tl))
     _, p2 = tl2.find_clip(new[0])
     assert p2.type == "text" and p2.text["content"] == "Hello"
-    print("✓ model extensions (speed/split, text, clamp, markers, copy-paste, sanitize, round-trip)")
+    o2 = otio.from_otio(otio.to_otio(tl))
+    assert any(abs(c.speed - 2.0) < 1e-6 for _, c in o2.all_clips()), "OTIO preserves speed"
+    assert any(c.type == "text" for _, c in o2.all_clips()), "OTIO preserves text clips"
+    print("✓ model extensions (speed/split, text, clamp, markers, copy-paste, sanitize, OTIO)")
 
 
 def test_render_smoke():

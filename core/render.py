@@ -97,10 +97,14 @@ def run(args: list[str], timeout: int = 3600, cancel=None) -> str:
     while proc.poll() is None:
         if cancel.is_set():
             proc.terminate()
-            try:
-                proc.wait(timeout=5)
+            try:                       # communicate() drains the pipes (wait() can deadlock)
+                proc.communicate(timeout=5)
             except Exception:
                 proc.kill()
+                try:
+                    proc.communicate(timeout=5)
+                except Exception:
+                    pass
             raise RenderError("Render cancelled.")
         if _t.monotonic() - started > timeout:
             proc.kill()
@@ -357,8 +361,13 @@ def export(tl, out_path=None, preset="mp4", quality="high", width=None, height=N
         chain = [f"[{i}:v]setpts=PTS-STARTPTS", f"fps={FPS}", "format=yuva420p"]
         if abs(sc - 1.0) > 1e-3:
             chain.append(f"scale=iw*{sc:.3f}:ih*{sc:.3f}")
-        if g.get("rotate"):
-            chain.append(f"rotate={float(g['rotate']):.4f}*PI/180:c=black@0:ow=rotw({float(g['rotate']):.4f}*PI/180):oh=roth({float(g['rotate']):.4f}*PI/180)")
+        try:
+            rot = float(g.get("rotate") or 0.0)
+        except (TypeError, ValueError):
+            rot = 0.0
+        if abs(rot) > 0.01:
+            rad = rot * 3.14159265 / 180.0
+            chain.append(f"rotate={rad:.5f}:c=black@0:ow=rotw({rad:.5f}):oh=roth({rad:.5f})")
         chain.append("setsar=1")
         if c.opacity < 0.999:
             chain.append(f"colorchannelmixer=aa={max(0, min(1, c.opacity)):.3f}")
@@ -435,7 +444,7 @@ def export(tl, out_path=None, preset="mp4", quality="high", width=None, height=N
         if r0 > 0.001:
             args += ["-ss", f"{r0:.3f}"]
         args += ["-t", f"{rdur:.3f}", *p["v"]]
-        if preset in ("mp4",):
+        if preset in ("mp4", "webm"):     # libx264 + libvpx-vp9 both honor -crf
             args += ["-crf", str(crf)]
         args += ["-pix_fmt", PIX, *p["a"], *p["extra"], out_path]
         run(args, cancel=cancel)

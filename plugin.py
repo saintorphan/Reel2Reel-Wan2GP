@@ -696,16 +696,18 @@ class Reel2Reel(WAN2GPPlugin):
             return self._inspector_values()
         new_sig = json.dumps({k: v for k, v in timeline.to_document(new).items()
                               if k != "ui"}, sort_keys=True)
-        if new_sig != self._last_sig:
+        changed = new_sig != self._last_sig
+        if changed:
             self._undo.append(json.dumps(timeline.to_document(self._project)))
             self._undo = self._undo[-_UNDO_CAP:]
             self._redo.clear()
             self._last_sig = new_sig
         self._project = new
-        try:                                            # crash-recovery autosave
-            timeline.save(paths.autosave_path(), self._project)
-        except Exception:
-            pass
+        if changed:                                     # crash-recovery autosave
+            try:                                        # (skip selection-only payloads)
+                timeline.save(paths.autosave_path(), self._project)
+            except Exception:
+                pass
         return self._inspector_values()
 
     def _sel(self):
