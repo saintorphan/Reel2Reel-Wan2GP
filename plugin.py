@@ -30,7 +30,7 @@ import gradio as gr
 from shared.utils.plugins import WAN2GPPlugin
 
 from .core import discovery, inbox, otio, paths, projects, render, timeline
-from .ui import logo, settings_panel, suite
+from .ui import settings_panel, suite
 from .ui import timeline_widget as tw
 from .ui.styles import CSS
 
@@ -110,22 +110,16 @@ _CTX_MENU_JS = (
     "if(b){b.value=v+'|'+Date.now();b.dispatchEvent(new Event('input',{bubbles:true}));}};"
     "var toG=function(el){var s=M.srcOf(el);if(s)relay('global|'+s);};"
     "var toP=function(el){var s=M.srcOf(el);if(s)relay('project|'+s);};"
-    "var rid=function(el){return (el&&el.getAttribute)?(el.getAttribute('data-id')||''):'';};"
+    # Generic 'image'/'video' items let the user right-click ANY image elsewhere in the
+    # app to drop it into a Reel2Reel bin — kept here.
     "M.register('image','Reel2Reel Library (global)',toG);"
     "M.register('image','Reel2Reel Library (project)',toP);"
     "M.register('video','Reel2Reel Library (global)',toG);"
-    "M.register('video','Reel2Reel Library (project)',toP);"
-    "M.register('.r2r-timeline-clip','Send to Vid2Vid',function(el){relay('vid2vid|'+rid(el));});"
-    "M.register('.r2r-timeline-clip','Send → I2V first frame',function(el){relay('start|'+rid(el));});"
-    "M.register('.r2r-timeline-clip','Send → I2V last frame',function(el){relay('end|'+rid(el));});"
-    "M.register('.r2r-timeline-clip','Send → sliding-window anchor',function(el){relay('anchor|'+rid(el));});"
-    "M.register('.r2r-timeline-clip','Split at playhead',function(el){relay('csplit|'+rid(el));});"
-    "M.register('.r2r-timeline-clip','Duplicate',function(el){relay('cdup|'+rid(el));});"
-    "M.register('.r2r-timeline-clip','Detach audio',function(el){relay('cdetach|'+rid(el));});"
-    "M.register('.r2r-timeline-clip','Delete clip',function(el){relay('cdel|'+rid(el));});}"
-    # NB: library thumbnails deliberately do NOT register here — they get their own
-    # Reel2Reel-only menu (timeline.js openLibMenu), which suppresses this shared menu
-    # via a window-capture listener so the cross-plugin items don't show on bins.
+    "M.register('video','Reel2Reel Library (project)',toP);}"
+    # Reel2Reel's own clip + bin menus are built in timeline.js (openClipMenu /
+    # openLibMenu) — they suppress this shared menu via a window-capture listener so we
+    # control ordering, drop the "saintorphan" header, and append cross-plugin items
+    # (which DO still register against .r2r-timeline-clip) at the bottom of the clip menu.
     "})()\">")
 
 
@@ -223,8 +217,7 @@ class Reel2Reel(WAN2GPPlugin):
         gr.HTML(_CTX_MENU_JS, elem_classes="reel2reel-hidden")
 
         with gr.Column(elem_id="reel2reel-root"):
-            gr.HTML(logo.banner_html())
-            ui = suite.build_suite()
+            ui = suite.build_suite()    # the logo banner now lives in the project bar
             # Relay for the timeline context-menu's native commands (JS -> Python).
             self.ctx_relay = gr.Textbox(elem_id="reel2reel-ctx-relay", visible=False,
                                        interactive=True, value="")
@@ -447,7 +440,8 @@ class Reel2Reel(WAN2GPPlugin):
         # Ordered outputs; the handler returns values positionally for whichever
         # targets exist on this host.
         out = [("tl", self.tl_from_py), ("bin", lib["bin_gallery"]),
-               ("global", lib["global_gallery"]), ("status", lib["status"])]
+               ("global", lib["global_gallery"]), ("outputs", lib["gallery"]),
+               ("status", lib["status"])]
         rft = getattr(self, "refresh_form_trigger", None)
         mt = getattr(self, "main_tabs", None)
         if rft is not None:
@@ -487,9 +481,9 @@ class Reel2Reel(WAN2GPPlugin):
                 which = "vid" if cmd == "vid2vid" else cmd
                 upd["status"] = self._send_to_gen(state, payload, which, upd)
             elif cmd in ("csplit", "cdel", "cdup", "cdetach", "copy", "cut", "paste",
-                         "delsel", "razor"):
+                         "delsel", "razor", "clip2pbin", "clip2gbin"):
                 upd["status"] = self._clip_action(cmd, payload, upd)
-            elif cmd in ("libadd", "libdrop", "libpbin", "libgbin", "librm"):
+            elif cmd in ("libadd", "libdrop", "libpbin", "libgbin", "librm", "libdel"):
                 upd["status"] = self._lib_action(cmd, payload, upd)
         return upd[names[0]] if len(names) == 1 else tuple(upd[n] for n in names)
 
@@ -513,6 +507,20 @@ class Reel2Reel(WAN2GPPlugin):
             self._push_undo(); self._ingest_at(path, track_id=track, start=t)
             upd["tl"] = self._env_after()
             return f"Dropped **{name}** onto the timeline."
+        if cmd == "libdel":                       # delete the actual file from disk
+            try:
+                Path(path).unlink()
+            except Exception as e:
+                return f"Couldn't delete {name}: {e}"
+            self._bin = [p for p in self._bin if p != path]
+            self._gbin = [p for p in self._gbin if p != path]
+            if self._project_name:
+                projects.set_bin(self._project_name, self._bin)
+            projects.set_global_bin(self._gbin)
+            g, _ = self._refresh_library()
+            upd["outputs"] = g; upd["bin"] = self._bin_value(); upd["global"] = self._gbin_value()
+            gr.Info(f"Deleted {name} from disk.")
+            return f"Deleted **{name}** from disk."
         if cmd == "libpbin":
             self._bin = self._dedup(self._bin + [path])
             if self._project_name:
@@ -583,6 +591,20 @@ class Reel2Reel(WAN2GPPlugin):
             self._project.ui["selected"] = None
             upd["tl"] = self._env_after()
             return f"Deleted {n} clip(s)."
+        if cmd in ("clip2pbin", "clip2gbin"):     # send a timeline clip back to a bin
+            _, clip = self._project.find_clip(payload)
+            if clip is None or not clip.src:
+                return "Clip not found."
+            src, name = clip.src, Path(clip.src).name
+            if cmd == "clip2gbin":
+                self._gbin = self._dedup(self._gbin + [src]); projects.set_global_bin(self._gbin)
+                upd["global"] = self._gbin_value(); gr.Info("Added to the global bin.")
+                return f"Added **{name}** to the global library."
+            self._bin = self._dedup(self._bin + [src])
+            if self._project_name:
+                projects.set_bin(self._project_name, self._bin)
+            upd["bin"] = self._bin_value(); gr.Info("Added to the project bin.")
+            return f"Added **{name}** to the project bin."
         track, clip = self._project.find_clip(payload)
         if clip is None:
             return "Clip not found."

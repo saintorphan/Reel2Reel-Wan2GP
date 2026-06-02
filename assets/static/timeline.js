@@ -353,24 +353,67 @@
   }
 
   // ---- preview --------------------------------------------------------------
-  function driveVideo() {
-    if (!S.video) return;
+  function isImg(u) { return /\.(png|jpe?g|gif|webp|bmp|avif)(\?|$)/i.test(u || ""); }
+  function currentPreviewClip() {
     var ph = (S.edit.ui && S.edit.ui.playhead) || 0, hit = null;
     clips().forEach(function (c) {
       if (c.kind === "Video" && c.url && ph >= c.start && ph < c.start + c.dur) hit = c;
     });
-    if (!hit) return;
-    if (S.video.getAttribute("data-src") !== hit.url) {
-      S.video.setAttribute("data-src", hit.url); S.video.src = hit.url;
+    return hit;
+  }
+  function driveVideo() {
+    if (!S.video) return;
+    var ph = (S.edit.ui && S.edit.ui.playhead) || 0, hit = currentPreviewClip(), img = S.previewImg;
+    if (!hit) { S.video.style.display = "block"; if (img) img.style.display = "none"; applyPreviewFilter(null); return; }
+    if (isImg(hit.url)) {                          // still image: <video> can't show it
+      if (img) {
+        if (img.getAttribute("src") !== hit.url) img.src = hit.url;
+        img.style.display = "block";
+      }
+      S.video.style.display = "none";
+      try { S.video.pause(); } catch (e) {}
+    } else {                                       // video: scrub the <video>
+      if (img) img.style.display = "none";
+      S.video.style.display = "block";
+      if (S.video.getAttribute("data-src") !== hit.url) {
+        S.video.setAttribute("data-src", hit.url); S.video.src = hit.url;
+      }
+      var ct = (hit.in || 0) + ((ph - hit.start) * (hit.speed || 1));
+      if (S.video.readyState >= 1) { try { S.video.currentTime = ct; } catch (e) {} }
+      else {
+        S.video.addEventListener("loadedmetadata", function onm() {
+          try { S.video.currentTime = ct; } catch (e) {}
+          S.video.removeEventListener("loadedmetadata", onm);
+        }, { once: true });
+      }
     }
-    var ct = (hit.in || 0) + ((ph - hit.start) * (hit.speed || 1));
-    if (S.video.readyState >= 1) { try { S.video.currentTime = ct; } catch (e) {} }
-    else {
-      S.video.addEventListener("loadedmetadata", function onm() {
-        try { S.video.currentTime = ct; } catch (e) {}
-        S.video.removeEventListener("loadedmetadata", onm);
-      }, { once: true });
+    applyPreviewFilter(hit);
+  }
+  // Live, approximate preview of the selected clip's grade/opacity via CSS filters
+  // (the real composite uses ffmpeg eq). Reads the inspector sliders while they move.
+  function readSliderVal(id) {
+    var el = document.getElementById(id);
+    var inp = el && el.querySelector('input[type="range"], input[type="number"]');
+    var v = inp ? parseFloat(inp.value) : NaN;
+    return isNaN(v) ? null : v;
+  }
+  function stageInsOpen() { var s = stageEl(); return s && !s.classList.contains("r2r-ins-collapsed"); }
+  function applyPreviewFilter(clip) {
+    var b = 0, c = 1, s = 1, op = 1, col = (clip && clip.color) || {};
+    b = col.brightness || 0;
+    c = (col.contrast == null ? 1 : col.contrast);
+    s = (col.saturation == null ? 1 : col.saturation);
+    if (clip && clip.opacity != null) op = clip.opacity;
+    var sel = selection();                         // live override while editing THIS clip
+    if (clip && sel.length === 1 && sel[0] === clip.id && stageInsOpen()) {
+      var lb = readSliderVal("r2r-ins-bright"); if (lb != null) b = lb;
+      var lc = readSliderVal("r2r-ins-contrast"); if (lc != null) c = lc;
+      var ls = readSliderVal("r2r-ins-sat"); if (ls != null) s = ls;
+      var lo = readSliderVal("r2r-ins-opacity"); if (lo != null) op = lo;
     }
+    var f = "brightness(" + (1 + b).toFixed(3) + ") contrast(" + c.toFixed(3)
+      + ") saturate(" + s.toFixed(3) + ")";
+    [S.video, S.previewImg].forEach(function (el) { if (el) { el.style.filter = f; el.style.opacity = op; } });
   }
 
   // ---- transport ------------------------------------------------------------
@@ -450,11 +493,17 @@
     }
     function up() {
       window.removeEventListener("pointermove", move);
+      var trackChanged = false;
       if (mode === "move" && dropTrack && dropTrack !== c.track) {
         var tt = trackById(dropTrack);     // only move between same-kind lanes
-        if (tt && tt.kind === c.kind) c.track = dropTrack;
+        if (tt && tt.kind === c.kind) { c.track = dropTrack; trackChanged = true; }
       }
-      mode = null; dropTrack = null; renderAll(); commit(); endInteract();
+      var didEdit = moved || trackChanged;
+      mode = null; dropTrack = null;
+      // A pure click (no drag) must NOT renderAll — that would destroy this element
+      // between the two clicks of a double-click and the dblclick would never fire.
+      if (didEdit) renderAll(); else highlight();
+      commit(); endInteract();
     }
     el.addEventListener("pointerdown", function (e) { down(e, "move"); });
     hl.addEventListener("pointerdown", function (e) { down(e, "l"); });
@@ -681,7 +730,15 @@
       relayCtx("libdrop|" + bin + "|" + idx + "|" + track + "|" + t.toFixed(3));
     });
   }
-  function libTick() { decorateLib(); wireLibDrop(); }
+  function decorateProjbar() {     // icon buttons → hover tooltips (Gradio has no title prop)
+    var tips = { "r2r-pb-open": "Open the selected project", "r2r-pb-save": "Save project",
+                 "r2r-pb-snap": "Snapshot a named version" };
+    Object.keys(tips).forEach(function (id) {
+      var el = document.getElementById(id), b = el && (el.querySelector("button") || el);
+      if (b && b.title !== tips[id]) b.title = tips[id];
+    });
+  }
+  function libTick() { decorateLib(); wireLibDrop(); decorateProjbar(); }
   var _libT = null;
   function scheduleLibTick() { if (_libT) clearTimeout(_libT); _libT = setTimeout(libTick, 80); }
   // Reel2Reel-only thumbnail menu (no cross-plugin items). Reuses the track-menu
@@ -704,6 +761,10 @@
       b.addEventListener("click", function () { closeTrackMenu(); relayCtx(it[1] + "|" + bin + "|" + idx); });
       menu.appendChild(b);
     });
+    placeMenu(menu, ev);
+  }
+  // shared popup placement + outside-close (used by track / lib / clip menus)
+  function placeMenu(menu, ev) {
     document.body.appendChild(menu);
     var mw = menu.offsetWidth, mh = menu.offsetHeight;
     menu.style.left = Math.min(ev.clientX, window.innerWidth - mw - 6) + "px";
@@ -713,6 +774,52 @@
       document.addEventListener("pointerdown", menu._onDown, true);
       window.addEventListener("blur", closeTrackMenu, { once: true });
     }, 0);
+  }
+  // OrphanSuite / cross-plugin menu items (Replicant, ImageSuite, …) that match an
+  // element — read live from the shared registry so they can sit at the BOTTOM of
+  // our own clip menu. Our Reel2Reel clip verbs are no longer registered there.
+  function crossPluginItemsFor(el) {
+    var M = window.SaintorphanMenu, out = [];
+    if (!M || !M.items) return out;
+    M.items.forEach(function (it) {
+      var m = it.match, hitEl = null;
+      if (m === "image") hitEl = el.closest("img");
+      else if (m === "video") hitEl = el.closest("video");
+      else { try { hitEl = el.closest(m); } catch (e) {} }
+      if (hitEl) out.push({ label: it.label, handler: it.handler, el: hitEl });
+    });
+    return out;
+  }
+  // Timeline-clip menu: standard timeline + Reel2Reel actions on top, then host
+  // sends, then cross-plugin items at the very bottom. No "saintorphan" header.
+  function openClipMenu(ev, cl) {
+    ev.preventDefault(); closeTrackMenu();
+    var id = cl.getAttribute("data-id"); if (!id) return;
+    var menu = document.createElement("div");
+    menu.className = "r2r-trk-menu"; menu.id = "r2r-trk-menu";
+    function add(label, fn) {
+      var b = document.createElement("button"); b.textContent = label;
+      b.addEventListener("click", function () { closeTrackMenu(); fn(); });
+      menu.appendChild(b);
+    }
+    function sep() { var s = document.createElement("div"); s.className = "r2r-trk-menu-sep"; menu.appendChild(s); }
+    add("✂ Split at playhead", function () { relayCtx("csplit|" + id); });
+    add("⧉ Duplicate", function () { relayCtx("cdup|" + id); });
+    add("🎙 Detach audio", function () { relayCtx("cdetach|" + id); });
+    add("📦 Copy to project bin", function () { relayCtx("clip2pbin|" + id); });
+    add("🌐 Copy to global bin", function () { relayCtx("clip2gbin|" + id); });
+    add("🗑 Delete clip", function () { relayCtx("cdel|" + id); });
+    sep();
+    add("→ Send to Vid2Vid", function () { relayCtx("vid2vid|" + id); });
+    add("→ I2V first frame", function () { relayCtx("start|" + id); });
+    add("→ I2V last frame", function () { relayCtx("end|" + id); });
+    add("→ Sliding-window anchor", function () { relayCtx("anchor|" + id); });
+    var cross = crossPluginItemsFor(cl);
+    if (cross.length) {
+      sep();
+      cross.forEach(function (it) { add(it.label, function () { try { it.handler(it.el); } catch (e) {} }); });
+    }
+    placeMenu(menu, ev);
   }
   function syncSnapBox() {
     var b = S.root && S.root.querySelector('[data-act="snap"]');
@@ -778,6 +885,7 @@
     var wrap = document.createElement("div"); wrap.className = "r2r-tl";
     wrap.innerHTML =
       '<video class="r2r-preview" playsinline></video>' +   // playhead-driven, no native controls
+      '<img class="r2r-preview-img" alt="" style="display:none">' +   // shown for still-image clips
       '<div class="r2r-toolbar">' +
       '  <div class="r2r-grp">' +                            // transport
       '    <button class="r2r-btn" data-act="home" title="Go to start">⏮</button>' +
@@ -835,6 +943,7 @@
     S.ruler = wrap.querySelector(".r2r-ruler");
     S.playhead = wrap.querySelector(".r2r-playhead");
     S.video = wrap.querySelector(".r2r-preview");
+    S.previewImg = wrap.querySelector(".r2r-preview-img");
     S.readout = wrap.querySelector(".r2r-readout");
     wireRuler();
     // One delegated handler: data-gr fires a hidden Gradio button (Python action via
@@ -913,13 +1022,19 @@
       }).observe(document.body, { childList: true, subtree: true });
     } catch (e) {}
     window.addEventListener("keydown", onKey, true);
+    // Live grade/opacity preview while dragging the inspector sliders.
+    document.addEventListener("input", function (e) {
+      if (e.target && e.target.closest && e.target.closest("#reel2reel-inspector"))
+        applyPreviewFilter(currentPreviewClip());
+    }, true);
     // window-capture beats the shared SaintorphanMenu's document-capture listener, so
-    // bin thumbnails show OUR menu only (no cross-plugin items). Clips are untouched.
+    // our surfaces get OUR Reel2Reel-first menu: bins (no cross-plugin items) and
+    // clips (standard actions on top, cross-plugin items appended at the bottom).
     window.addEventListener("contextmenu", function (e) {
-      var th = e.target && e.target.closest && e.target.closest(".r2r-lib-thumb");
-      if (!th) return;
-      e.stopImmediatePropagation(); e.preventDefault();
-      openLibMenu(e, th);
+      var th = e.target.closest && e.target.closest(".r2r-lib-thumb");
+      if (th) { e.stopImmediatePropagation(); e.preventDefault(); openLibMenu(e, th); return; }
+      var cl = e.target.closest && e.target.closest(".r2r-timeline-clip");
+      if (cl) { e.stopImmediatePropagation(); e.preventDefault(); openClipMenu(e, cl); return; }
     }, true);
   }
 

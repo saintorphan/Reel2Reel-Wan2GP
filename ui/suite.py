@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import gradio as gr
 
-from . import page
+from . import logo, page
 from .settings_panel import build_settings_panel
 
 _TAB_IDS = {"library": "reel2reel-lib", "timeline": "reel2reel-tl",
@@ -25,15 +25,19 @@ def _projbar() -> dict:
     every Reel2Reel page. Hot path (open/save/snapshot) inline; rare/destructive ops
     tucked behind one disclosure. plugin.py wires it via _wire_projects(ui['bar'])."""
     c = {}
+    # Logo on the left (flows in the header like ImageSuite's), CRUD pushed to the
+    # right as icon buttons (tooltips set in timeline.js decorateProjbar).
     with gr.Row(elem_id="reel2reel-projbar"):
-        c["current_lbl"] = gr.Markdown("*No project open*")
-        c["proj_dd"] = gr.Dropdown(label="Open project", choices=[], scale=2,
-                                  container=False)
-        c["open"] = gr.Button("Open", scale=0)
-        c["save"] = gr.Button("💾 Save", scale=0, elem_classes="reel2reel-prim")
-        c["ver_label"] = gr.Textbox(placeholder="snapshot name", scale=1,
+        gr.HTML(logo.banner_html(), elem_id="reel2reel-bannerwrap")
+        c["current_lbl"] = gr.Markdown("*No project open*", elem_id="reel2reel-projlabel")
+        c["proj_dd"] = gr.Dropdown(label="Open project", choices=[], scale=0,
+                                  container=False, min_width=170)
+        c["open"] = gr.Button("📂", scale=0, min_width=42, elem_id="r2r-pb-open")
+        c["save"] = gr.Button("💾", scale=0, min_width=42, elem_id="r2r-pb-save",
+                             elem_classes="reel2reel-prim")
+        c["ver_label"] = gr.Textbox(placeholder="snapshot name", scale=0, min_width=120,
                                    container=False, show_label=False)
-        c["snapshot"] = gr.Button("📸 Snapshot", scale=0)
+        c["snapshot"] = gr.Button("📸", scale=0, min_width=42, elem_id="r2r-pb-snap")
         c["bar_status"] = gr.Markdown("", elem_id="reel2reel-bar-status")
     with gr.Accordion("⚙ Manage project · versions · interchange", open=False,
                       elem_id="reel2reel-manage"):

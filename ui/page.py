@@ -36,18 +36,18 @@ def _library() -> dict:
         c["refresh"] = gr.Button("🔄", scale=0, min_width=34, elem_id="reel2reel-lib-refresh")
 
     with gr.Tabs(elem_id="reel2reel-lib-tabs"):
-        with gr.Tab("🎞 Outputs"):
-            c["gallery"] = _bin("r2r-bin-outputs")
-            c["up_outputs"] = gr.UploadButton("⬆ Import a file", size="sm",
-                                             file_count="single")
-        with gr.Tab("📦 Project"):
-            c["bin_gallery"] = _bin("r2r-bin-pbin")
-            c["up_pbin"] = gr.UploadButton("⬆ Add to project bin", size="sm",
-                                          file_count="single")
         with gr.Tab("🌐 Global"):
             c["global_gallery"] = _bin("r2r-bin-gbin")
             c["up_gbin"] = gr.UploadButton("⬆ Add to global bin", size="sm",
                                           file_count="single")
+        with gr.Tab("📦 Project"):
+            c["bin_gallery"] = _bin("r2r-bin-pbin")
+            c["up_pbin"] = gr.UploadButton("⬆ Add to project bin", size="sm",
+                                          file_count="single")
+        with gr.Tab("🎞 Outputs"):
+            c["gallery"] = _bin("r2r-bin-outputs")
+            c["up_outputs"] = gr.UploadButton("⬆ Import a file", size="sm",
+                                             file_count="single")
 
     # Preview pane — drawer-width; shows whichever component matches the selection.
     with gr.Group(elem_id="reel2reel-lib-preview"):
@@ -101,7 +101,8 @@ def build_editor() -> tuple[dict, dict]:
                 c["ins_label"] = gr.Textbox(label="Label / title text")
                 with gr.Accordion("Basics", open=True):
                     c["ins_gain"] = gr.Slider(-40, 12, value=0, step=0.5, label="Gain (dB)")
-                    c["ins_opacity"] = gr.Slider(0, 1, value=1, step=0.05, label="Opacity")
+                    c["ins_opacity"] = gr.Slider(0, 1, value=1, step=0.05, label="Opacity",
+                                                elem_id="r2r-ins-opacity")
                     with gr.Row():
                         c["ins_fade_in"] = gr.Slider(0, 5, value=0, step=0.05, label="Fade in")
                         c["ins_fade_out"] = gr.Slider(0, 5, value=0, step=0.05, label="Fade out")
@@ -111,9 +112,12 @@ def build_editor() -> tuple[dict, dict]:
                     c["ins_reverse"] = gr.Checkbox(label="Reverse")
                 with gr.Accordion("Color", open=False):
                     c["ins_auto"] = gr.Button("✨ Auto-Enhance", size="sm")
-                    c["ins_bright"] = gr.Slider(-1, 1, value=0, step=0.02, label="Brightness")
-                    c["ins_contrast"] = gr.Slider(0, 2, value=1, step=0.02, label="Contrast")
-                    c["ins_sat"] = gr.Slider(0, 3, value=1, step=0.02, label="Saturation")
+                    c["ins_bright"] = gr.Slider(-1, 1, value=0, step=0.02, label="Brightness",
+                                               elem_id="r2r-ins-bright")
+                    c["ins_contrast"] = gr.Slider(0, 2, value=1, step=0.02, label="Contrast",
+                                                 elem_id="r2r-ins-contrast")
+                    c["ins_sat"] = gr.Slider(0, 3, value=1, step=0.02, label="Saturation",
+                                            elem_id="r2r-ins-sat")
                     c["ins_gamma"] = gr.Slider(0.1, 3, value=1, step=0.02, label="Gamma")
                     with gr.Row():
                         c["ins_temp"] = gr.Slider(-1, 1, value=0, step=0.02,

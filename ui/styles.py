@@ -15,24 +15,28 @@ CSS = f"""
 button.reel2reel-tabbtn {{ border: 2px solid #2ea043 !important; border-radius: 6px; }}
 
 #reel2reel-root .reel2reel-prim {{ background: {_ACCENT}; border-color: {_ACCENT_DK}; }}
-#reel2reel-root .reel2reel-gallery {{ min-height: 300px; }}
+/* drawers are fixed-height and scroll vertically when they hold many clips */
+#reel2reel-root .reel2reel-gallery {{ min-height: 0 !important; }}
+#reel2reel-root .reel2reel-gallery .grid-wrap {{ overflow-y: auto !important; max-height: 240px; }}
 #reel2reel-inspector {{ border-left: 2px solid {_ACCENT_DK}; padding-left: 10px; }}
 
-/* Small logo, tucked top-LEFT. Absolutely positioned; the sub-tab nav gets left
-   padding so its buttons never slide under the logo. */
-#reel2reel-banner {{
-    position: absolute; top: 2px; left: 6px; z-index: 6; pointer-events: none;
-}}
-#reel2reel-banner img {{ height: 60px; width: auto; display: block; }}
-#reel2reel-banner h2 {{ margin: 0; color: {_ACCENT}; font-style: italic; font-size: 28px; }}
-#reel2reel-root .tab-nav {{ padding-left: 230px; }}
+/* Logo flows in the project bar (same header height as ImageSuite's 104px banner). */
+#reel2reel-banner {{ display: block; }}
+#reel2reel-banner img {{ height: 104px; width: auto; max-width: 520px; object-fit: contain;
+    display: block; }}
+#reel2reel-banner h2 {{ margin: 0; color: {_ACCENT}; font-style: italic; font-size: 44px; }}
 
-/* ---- persistent project / version bar (above the sub-tabs, on every page) ---- */
-#reel2reel-projbar {{ padding-left: 230px; display: flex; align-items: center; gap: 8px;
-    margin-bottom: 4px; padding-bottom: 6px; border-bottom: 1px solid {_ACCENT_DK}; }}
+/* ---- persistent project / version bar (logo left · CRUD pushed right) ---- */
+#reel2reel-projbar {{ display: flex; align-items: center; gap: 6px; flex-wrap: nowrap;
+    justify-content: flex-end; margin-bottom: 4px; padding-bottom: 6px;
+    border-bottom: 1px solid {_ACCENT_DK}; }}
+#reel2reel-bannerwrap {{ margin-right: auto; flex: 0 0 auto; }}   /* logo hard-left */
 #reel2reel-projbar > * {{ margin: 0 !important; }}
 #reel2reel-projbar .prose p {{ margin: 0; font-size: 13px; }}
+#reel2reel-projlabel .prose p {{ font-style: italic; opacity: .85; white-space: nowrap; }}
 #reel2reel-bar-status .prose p {{ margin: 0; font-size: 12px; color: {_ACCENT}; }}
+/* icon buttons in the bar: square-ish, big glyph */
+#r2r-pb-open, #r2r-pb-save, #r2r-pb-snap {{ font-size: 17px; padding: 4px 0; }}
 #reel2reel-manage {{ margin-bottom: 6px; }}
 
 /* ---- timeline: hide the demoted host-action Row (kept in DOM for the JS bridge) ---- */

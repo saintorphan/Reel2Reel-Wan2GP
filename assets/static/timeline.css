@@ -13,9 +13,10 @@
 }
 
 /* full-width preview on top, as wide as the timeline canvas, scaling by aspect */
-.r2r-tl .r2r-preview {
+.r2r-tl .r2r-preview, .r2r-tl .r2r-preview-img {
   width: 100%; height: auto; max-height: 52vh; background: #000; display: block;
   border: 1px solid var(--r2r-edge); border-radius: 8px; margin: 0 0 8px;
+  object-fit: contain;
 }
 .r2r-tl .r2r-toolbar {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 0 0 8px;
