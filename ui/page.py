@@ -13,8 +13,6 @@ import gradio as gr
 
 from . import timeline_widget
 
-MODES = ("timeline", "render")   # 'library' is now a collapsible rail inside the editor
-
 
 def _library() -> dict:
     """The Library rail: three thumbnail drawers (Outputs / Project / Global), each with
@@ -23,7 +21,7 @@ def _library() -> dict:
     (Add to timeline / copy to a bin / remove + the cross-plugin items), or drag a
     thumbnail onto a track / blank canvas. Decoration + DnD live in timeline.js; the
     relay verbs (libadd / libpbin / libgbin / librm / libdrop) are handled in _on_ctx."""
-    c = {"mode": "library"}
+    c = {}
 
     def _bin(elem_id):     # narrow drawer — the library is a left rail
         return gr.Gallery(columns=2, height=240, object_fit="cover", preview=False,
@@ -66,7 +64,7 @@ def build_editor() -> tuple[dict, dict]:
     collapsible Library rail (left) · timeline canvas (center) · collapsible clip
     inspector (right). The two dicts stay separate so the existing _wire_timeline /
     _wire_library keep operating on their own keys — no plugin wiring changes."""
-    c = {"mode": "timeline"}
+    c = {}
     # Host-action buttons: demoted to a CSS-hidden Row (#r2r-host-tools). They stay
     # in the DOM so the in-canvas toolbar + keyboard shortcuts can fire them by
     # elem_id via the clickGr('#id button') bridge — visible=False would drop them.
@@ -164,7 +162,7 @@ def build_editor() -> tuple[dict, dict]:
 
 
 def _render() -> dict:
-    c = {"mode": "render"}
+    c = {}
     with gr.Column(elem_id="r2r-render"):
         with gr.Row():
             # left: compact grouped controls; right: big sticky preview

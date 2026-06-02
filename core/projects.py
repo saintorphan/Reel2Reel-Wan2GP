@@ -5,7 +5,7 @@ Layout::
 
     projects_dir()/<slug>/
         project.json          # meta: name, created, modified, bin[], versions[]
-        timeline.r2r.json     # the current timeline (Reel2ReelProject.1)
+        timeline.r2r.json     # the current timeline (Reel2ReelProject.2)
         versions/<slug>.r2r.json   # named snapshots
 
 Legacy flat ``<name>.r2r.json`` files (v0.1/0.2) are migrated into this layout on
@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import shutil
 from pathlib import Path
 
 from . import paths, timeline
+
+logger = logging.getLogger("reel2reel.projects")
 
 META_SCHEMA = "Reel2ReelProjectMeta.1"
 _TIMELINE = "timeline.r2r.json"
@@ -74,7 +77,7 @@ def load_meta(name: str) -> dict:
 def save_meta(name: str, meta: dict) -> None:
     meta["modified"] = _now()
     project_dir(name).mkdir(parents=True, exist_ok=True)
-    _meta_path(name).write_text(json.dumps(meta, indent=2))
+    paths.atomic_write_text(_meta_path(name), json.dumps(meta, indent=2))
 
 
 # --- discovery / migration -------------------------------------------------
@@ -189,7 +192,13 @@ def load_timeline(name: str) -> timeline.Timeline | None:
     p = _timeline_path(name)
     if not p.is_file():
         return None
-    return timeline.load(p)
+    try:
+        return timeline.load(p)
+    except Exception:
+        # A single bad/corrupt record degrades to 'could not open' rather than an
+        # uncaught exception that breaks the whole UI.
+        logger.warning("Could not load timeline for %s", name, exc_info=True)
+        return None
 
 
 # --- versioning (manual named snapshots) -----------------------------------
@@ -310,8 +319,7 @@ def set_global_bin(items: list[str]) -> None:
             seen.add(ap)
             out.append(ap)
     try:
-        _global_bin_path().parent.mkdir(parents=True, exist_ok=True)
-        _global_bin_path().write_text(json.dumps(out, indent=2))
+        paths.atomic_write_text(_global_bin_path(), json.dumps(out, indent=2))
     except Exception:
         pass
 

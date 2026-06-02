@@ -6,11 +6,21 @@ trailing separators) or "" when a no-op.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 
 def _esc_drawtext(s: str) -> str:
     """Escape text for ffmpeg drawtext (colon, backslash, single-quote, percent)."""
-    s = (s or "").replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\\\'")
+    # A single-quote uses ffmpeg's close/reopen idiom: ' -> '\'' (the literal
+    # double-backslash form would render a stray backslash glyph / break the parse).
+    s = (s or "").replace("\\", "\\\\").replace(":", "\\:").replace("'", "'\\''")
     return s.replace("%", "\\%").replace("\n", "\\n")
+
+
+def _esc_path(p: str) -> str:
+    """Escape a filesystem path for inside a single-quoted ffmpeg filter arg
+    (backslash, colon, single-quote) — used for LUT and fontfile paths."""
+    return (p or "").replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
 
 
 def color_vf(color: dict | None) -> str:
@@ -69,13 +79,14 @@ def master_vf(master: dict | None) -> str:
         temp = _clamp(master.get("temp", 0.0), -1.0, 1.0, 0.0)
         if abs(b) > 1e-3 or abs(c - 1) > 1e-3 or abs(s - 1) > 1e-3:
             parts.append(f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}")
-        if abs(temp) > 1e-3:
-            parts.append(f"colorchannelmixer=rr={1 + 0.2 * temp:.3f}:bb={1 - 0.2 * temp:.3f}")
+        if abs(temp) > 1e-3:                          # 0.25 to match color_vf's mixer
+            parts.append(f"colorchannelmixer=rr={1 + 0.25 * temp:.3f}:bb={1 - 0.25 * temp:.3f}")
     if master.get("lut_on"):
         p = str(master.get("lut_path") or "").strip()
-        if p:
-            esc = p.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-            parts.append(f"lut3d='{esc}'")
+        # Only emit lut3d when the file actually exists — a deleted/stale .cube
+        # otherwise makes ffmpeg abort the whole export/preview with no hint.
+        if p and Path(p).is_file():
+            parts.append(f"lut3d='{_esc_path(p)}'")
     if master.get("sharpen_on"):
         a = _clamp(master.get("sharpen", 0.8), 0.0, 2.0, 0.8)
         if a > 0.02:
@@ -205,8 +216,8 @@ def drawtext(text: dict | None, fontfile: str | None, W: int, H: int) -> str:
     yexpr = "(h-text_h)/2" if y in (None, "center") else str(int(y))
     parts = [f"text='{content}'", f"fontsize={size}", f"fontcolor={col}",
              f"x={xexpr}", f"y={yexpr}"]
-    if fontfile:
-        parts.append(f"fontfile='{fontfile}'")
+    if fontfile:                                      # escape like the LUT path (spaces/special chars)
+        parts.append(f"fontfile='{_esc_path(fontfile)}'")
     if text.get("box"):
         bc = (text.get("box_color") or "#000000aa").replace("#", "0x")
         parts.append("box=1")

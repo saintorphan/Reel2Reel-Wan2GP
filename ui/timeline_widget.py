@@ -55,11 +55,25 @@ def file_url(path) -> str | None:
 
 def register_static_paths(extra_dirs=None) -> None:
     """Allow Gradio to serve our assets + render/cache dirs by absolute path.
-    Cumulative global; safe to call more than once. Best-effort."""
-    dirs = [str(_ASSETS)]
+    Cumulative global; safe to call more than once. Best-effort.
+
+    Hardened: each dir is normalized to an absolute resolved path and any that
+    resolves to '/', a filesystem root, or the user's home dir is SKIPPED (with a
+    warning) — set_static_paths is process-global, so an over-broad root would make
+    the whole filesystem fetchable via /gradio_api/file=."""
+    home = Path.home().resolve()
+    dirs = [str(_ASSETS.resolve())]
     for d in (extra_dirs or []):
-        if d:
-            dirs.append(str(d))
+        if not d:
+            continue
+        try:
+            rp = Path(str(d)).expanduser().resolve()
+        except Exception:
+            continue
+        if rp == rp.parent or rp == home:        # filesystem root or $HOME
+            logger.warning("Refusing to register over-broad static path %s", rp)
+            continue
+        dirs.append(str(rp))
     try:
         gr.set_static_paths(dirs)
     except Exception:

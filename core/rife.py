@@ -18,9 +18,23 @@ from . import render
 
 _MODEL_NAMES = ("rife4.26.pkl",)     # v4 weights the host ships / downloads
 _MAX_FRAMES = 1200                   # ~40s @30fps — beyond this we fall back (memory)
+_MAX_PIXELS = 1280 * 720 * 1200      # total-pixel budget (≈ HD × _MAX_FRAMES)
+
+# Distinct last-failure reason so plugin._render can say 'cut too large' vs 'unavailable'.
+last_error = ""
 
 
 def _locate_model() -> str | None:
+    # Prefer the host's checkpoint locator (it knows where ckpts actually live, which
+    # may not be under cwd) before falling back to the env var / cwd rglob search.
+    try:
+        from shared.utils.files_locator import locate_file
+        for name in _MODEL_NAMES:
+            hit = locate_file(name, error_if_none=False)
+            if hit:
+                return str(hit)
+    except Exception:                # ImportError on non-host envs, or locator failure
+        pass
     env = os.environ.get("REEL2REEL_RIFE_MODEL")
     if env and Path(env).exists():
         return env
@@ -48,7 +62,11 @@ def available() -> bool:
 def _device() -> str:
     try:
         import torch
-        return "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            return "cuda"
+        if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
     except Exception:
         return "cpu"
 
@@ -83,35 +101,47 @@ def _probe(src: str):
 
 def interpolate_file(src: str, dest: str, exp: int, progress=None) -> str | None:
     """RIFE-interpolate ``src`` (×2**exp frames) → ``dest``, preserving audio.
-    Returns ``dest`` on success, ``None`` on any failure / when too large."""
+    Returns ``dest`` on success, ``None`` on any failure / when too large. Records a
+    distinct reason on the module-level ``last_error`` ('too large' vs 'unavailable')."""
+    global last_error
+    last_error = ""
     exe = render.ffmpeg_path()
     if not exe or int(exp) <= 0:
+        last_error = "unavailable"
         return None
     model = _locate_model()
     if not model:
+        last_error = "unavailable"
         return None
     try:
         import numpy as np
         import torch
         from postprocessing.rife.inference import temporal_interpolation
     except Exception:
+        last_error = "unavailable"
         return None
     info = _probe(src)
     if not info:
+        last_error = "unavailable"
         return None
     w, h, n, fps = info
-    if n > _MAX_FRAMES:
+    # Cap BOTH frame count and total pixels — 1200 HD frames ≈ 7.5 GB before the 2-4×
+    # output tensor, which would OOM. Distinguish 'too large' from 'unavailable'.
+    if n > _MAX_FRAMES or (w * h * n) > _MAX_PIXELS:
+        last_error = "too_large"
         return None                                   # too big for an in-memory pass
     try:                                              # decode → uint8 [C,T,H,W]
         raw = subprocess.run([exe, "-v", "error", "-i", src, "-f", "rawvideo",
                               "-pix_fmt", "rgb24", "-"], capture_output=True, timeout=900).stdout
         arr = np.frombuffer(raw, dtype=np.uint8)
         if arr.size < w * h * 3:
+            last_error = "failed"
             return None
         t = arr.size // (w * h * 3)
         arr = arr[: t * w * h * 3].reshape(t, h, w, 3)
         frames = torch.from_numpy(arr.copy()).permute(3, 0, 1, 2).contiguous()
     except Exception:
+        last_error = "failed"
         return None
     if callable(progress):
         try:
@@ -123,6 +153,7 @@ def interpolate_file(src: str, dest: str, exp: int, progress=None) -> str | None
                                        rife_version="v4")
         out_np = out_t.permute(1, 2, 3, 0).contiguous().cpu().numpy().astype(np.uint8)
     except Exception:
+        last_error = "failed"
         return None
     out_fps = fps * (2 ** int(exp))
     try:                                              # re-encode + remux original audio
@@ -135,7 +166,9 @@ def interpolate_file(src: str, dest: str, exp: int, progress=None) -> str | None
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         proc.communicate(out_np.tobytes(), timeout=1800)
         if proc.returncode != 0 or not Path(dest).exists():
+            last_error = "failed"
             return None
     except Exception:
+        last_error = "failed"
         return None
     return dest

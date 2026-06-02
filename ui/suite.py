@@ -15,9 +15,11 @@ import gradio as gr
 from . import logo, page
 from .settings_panel import build_settings_panel
 
-_TAB_IDS = {"library": "reel2reel-lib", "timeline": "reel2reel-tl",
-            "render": "reel2reel-render", "settings": "reel2reel-settings"}
-_LABELS = {"library": "📚 Library", "timeline": "🎞 Timeline", "render": "🎬 Render"}
+# The standalone Library tab was removed (the editor hosts library as a left rail),
+# so there's no library tab id/label — pages["library"] comes from build_editor().
+_TAB_IDS = {"timeline": "reel2reel-tl", "render": "reel2reel-render",
+            "settings": "reel2reel-settings"}
+_LABELS = {"timeline": "🎞 Timeline", "render": "🎬 Render"}
 
 
 def _projbar() -> dict:

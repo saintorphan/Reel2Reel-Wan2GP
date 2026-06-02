@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 from pathlib import Path
 
 logger = logging.getLogger("reel2reel.paths")
@@ -52,6 +53,36 @@ def save_config() -> None:
         _config_path().write_text(json.dumps(load_config(), indent=2))
     except Exception:
         logger.warning("Could not write %s", _config_path(), exc_info=True)
+
+
+def validate_dir(val) -> str | None:
+    """Validate a user-supplied directory override. Returns an error string if the
+    path is unsafe/unwritable, else None (valid). An empty/None value is a no-op
+    (valid — caller treats it as 'leave the configured value alone')."""
+    if val in (None, ""):
+        return None
+    try:
+        p = Path(str(val)).expanduser()
+        rp = p.resolve()
+    except Exception:
+        return "not a valid path"
+    if rp == rp.parent:                       # a filesystem root ('/', 'C:\\')
+        return "refusing a filesystem root"
+    if rp == Path.home().resolve():
+        return "refusing the home directory"
+    if p.exists() and not p.is_dir():
+        return "exists but is not a directory"
+    # Verify the dir (or its nearest existing parent) is writable.
+    probe = p
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return "could not create the directory"
+    if not os.access(str(p), os.W_OK):
+        return "directory is not writable"
+    return None
 
 
 def set_dirs(*, projects=None, renders=None, wan2gp_outputs=None) -> None:
@@ -101,6 +132,18 @@ def norm_dir() -> Path:
     return cache_dir() / "norm"
 
 
+def uploads_dir() -> Path:
+    """Library uploads (bin-imported media) — kept OUT of renders_dir so a
+    clear-cache(include_renders=True) can't wipe user media."""
+    return lab_root() / "uploads"
+
+
+def luts_dir() -> Path:
+    """Uploaded .cube LUTs — likewise kept out of renders_dir so clear-cache
+    can't delete them."""
+    return lab_root() / "luts"
+
+
 # --- the Wan2GP outputs folder we import FROM (read-only) -------------------
 
 def wan2gp_outputs_dir(server_config: dict | None = None) -> Path:
@@ -120,10 +163,11 @@ def wan2gp_outputs_dir(server_config: dict | None = None) -> Path:
 
 
 def import_candidates(server_config: dict | None = None) -> list[Path]:
-    """All the directories worth scanning for importable clips (the outputs dir
-    plus our own renders, so a finished cut can be re-edited)."""
+    """All the directories worth scanning for importable clips (the outputs dir, our
+    own renders so a finished cut can be re-edited, and the uploads dir where
+    Library-imported media lives)."""
     out: list[Path] = []
-    for d in (wan2gp_outputs_dir(server_config), renders_dir()):
+    for d in (wan2gp_outputs_dir(server_config), renders_dir(), uploads_dir()):
         if d and Path(d).is_dir():
             out.append(Path(d))
     return out
@@ -138,15 +182,36 @@ def _safe(name: str) -> str:
     return (cleaned or "untitled").rstrip(". ")
 
 
-def project_path(name: str) -> Path:
-    return projects_dir() / f"{_safe(name)}.r2r.json"
+# --- durable atomic writes --------------------------------------------------
 
-
-def list_projects() -> list[str]:
-    d = projects_dir()
-    if not d.is_dir():
-        return []
-    return sorted(p.name[:-len(".r2r.json")] for p in d.glob("*.r2r.json"))
+def atomic_write_text(path, text: str) -> None:
+    """Write ``text`` to ``path`` durably: temp file + flush + fsync, atomic
+    os.replace, then fsync the parent directory so a crash can't leave a zero/
+    truncated file. The shared writer behind timeline.save and the project
+    sidecars (project.json / global_bin.json)."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+        try:                                # fsync the dir entry too (best-effort)
+            dfd = os.open(str(p.parent), os.O_DIRECTORY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        except (OSError, AttributeError):   # O_DIRECTORY missing on some platforms
+            pass
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # --- lifecycle --------------------------------------------------------------
@@ -201,7 +266,8 @@ def human_size(n: int) -> str:
 def ensure_dirs() -> Path:
     """Create the plugin's own directory tree if missing. Idempotent; called on
     plugin setup. Never touches the (read-only) Wan2GP outputs dir."""
-    for d in (projects_dir(), renders_dir(), cache_dir(), thumbs_dir(), norm_dir()):
+    for d in (projects_dir(), renders_dir(), cache_dir(), thumbs_dir(), norm_dir(),
+              uploads_dir(), luts_dir()):
         try:
             d.mkdir(parents=True, exist_ok=True)
         except Exception:

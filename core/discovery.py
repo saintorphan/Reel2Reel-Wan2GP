@@ -8,6 +8,7 @@ but everything degrades to a self-contained ffprobe fallback.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import subprocess
@@ -63,14 +64,28 @@ def list_importable(server_config: dict | None = None, limit: int = 200) -> list
 
 
 def probe_clip(path: str, get_video_info=None) -> dict:
-    """Return {fps, dur, width, height, has_audio} for a media file.
-    Uses an injected host ``get_video_info`` if given, else ffprobe."""
-    info = {"fps": None, "dur": None, "width": None, "height": None, "has_audio": False}
+    """Return {fps, dur, width, height, has_audio, probed} for a media file.
+    Uses an injected host ``get_video_info`` if given, else ffprobe. ``probed`` is
+    False when no probe ran (degraded host), so callers can tell 'probe failed' from
+    a real zero."""
+    info = {"fps": None, "dur": None, "width": None, "height": None,
+            "has_audio": False, "probed": False}
     if callable(get_video_info):
         try:
             vi = get_video_info(path)
             if isinstance(vi, dict):
                 info.update({k: vi.get(k, info[k]) for k in info if k in vi})
+                info["probed"] = True
+                return info
+            # Wan2GP's get_video_info returns a 4-tuple (fps, w, h, frame_count);
+            # has_audio isn't in it, so it stays False from the host path.
+            if isinstance(vi, (tuple, list)) and len(vi) >= 4:
+                fps, w, h, fc = vi[:4]
+                info["fps"] = fps
+                info["width"] = w
+                info["height"] = h
+                info["dur"] = (fc / fps) if (fps and fc) else None
+                info["probed"] = True
                 return info
         except Exception:
             pass
@@ -101,6 +116,7 @@ def probe_clip(path: str, get_video_info=None) -> dict:
         info["dur"] = float(data.get("format", {}).get("duration"))
     except (TypeError, ValueError):
         pass
+    info["probed"] = True
     return info
 
 
@@ -112,7 +128,7 @@ def audio_placeholder() -> str | None:
     try:
         from PIL import Image, ImageDraw
         out.parent.mkdir(parents=True, exist_ok=True)
-        img = Image.new("RGB", (320, 200), (47, 111, 94))
+        img = Image.new("RGB", (320, 200), (224, 161, 6))     # amber accent (brand)
         d = ImageDraw.Draw(img)
         d.text((130, 80), "♪", fill=(234, 255, 247))
         img.save(out)
@@ -121,11 +137,21 @@ def audio_placeholder() -> str | None:
         return None
 
 
-def thumbnail(path: str, clip_id: str, get_video_frame=None) -> str | None:
+def _src_tag(path: str) -> str:
+    """A short hash of the src path (+ mtime) so a relinked clip regenerates its
+    thumbnail instead of returning the stale cached file."""
+    try:
+        mtime = Path(path).stat().st_mtime
+    except OSError:
+        mtime = 0.0
+    return hashlib.sha1(f"{path}|{mtime}".encode()).hexdigest()[:10]
+
+
+def thumbnail(path: str, clip_id: str) -> str | None:
     """Write a poster-frame jpg into the thumbs cache and return its path.
     Images are shown as-is; videos grab a frame near t=0; audio gets a tile."""
     k = kind_of(path)
-    out = paths.thumbs_dir() / f"{clip_id}.jpg"
+    out = paths.thumbs_dir() / f"{clip_id}_{_src_tag(path)}.jpg"
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists():
         return str(out)

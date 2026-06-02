@@ -14,12 +14,25 @@ Usage:
 
 --- Badge parameters (tweak here; the badge will change often until stable) ---
 """
+import json
 import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-VERSION = "v0.4.0"
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _default_version() -> str:
+    """Single source of truth: read the version from plugin_info.json (CLI arg overrides)."""
+    try:
+        v = json.loads((ROOT / "plugin_info.json").read_text()).get("version", "0.0.0")
+    except Exception:
+        v = "0.0.0"
+    return v if v.startswith("v") else f"v{v}"
+
+
+VERSION = _default_version()
 COLOR = (255, 209, 26, 255)        # gold, to echo the glowing "2"
 STROKE = (16, 16, 20, 255)         # dark outline so it reads over the chrome
 STROKE_W = 3
@@ -30,7 +43,6 @@ POS_X_FROM_RIGHT = 26
 POS_Y_FROM_BOTTOM = 22
 ANCHOR = "rs"
 
-ROOT = Path(__file__).resolve().parent.parent
 BASE = ROOT / "assets" / "reel2reel_base.png"
 
 

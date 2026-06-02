@@ -22,7 +22,7 @@
   var ROOT_ID = "r2r_timeline_root", TO_PY = "r2r_tl_to_py", FROM_PY = "r2r_tl_from_py";
 
   var S = {
-    edit: { name: "Cut 1", fps: 24, tracks: [], clips: [], transitions: [],
+    edit: { name: "Cut 1", fps: 30, tracks: [], clips: [], transitions: [],
             ui: { px_per_sec: 80, playhead: 0, selected: null, snap: true } },
     pxPerSec: 80, snap: true, lastSeqIn: -1, mounted: false, playing: false,
     root: null, lanes: null, ruler: null, playhead: null, video: null, readout: null,
@@ -57,13 +57,25 @@
     _apply(msg);
   }
   function _apply(msg) {
-    if (typeof msg.seq === "number") S.lastSeqIn = msg.seq;
     if (msg.op === "load" && msg.edit) {
+      // Preserve an uncommitted client-side selection across the wholesale swap
+      // (a load arriving inside the commit-debounce window would otherwise drop it).
+      var keep = selection();
       S.edit = msg.edit;
+      var present = {};
+      (msg.edit.clips || []).forEach(function (c) { present[c.id] = 1; });
+      var filtered = keep.filter(function (id) { return present[id]; });
+      S.edit.ui = S.edit.ui || {};
+      S.edit.ui.selection = filtered;
+      S.edit.ui.selected = filtered[0] || (msg.edit.ui && msg.edit.ui.selected) || null;
       var ui = msg.edit.ui || {};
       if (ui.px_per_sec) S.pxPerSec = ui.px_per_sec;
       if (typeof ui.snap === "boolean") S.snap = ui.snap;
+      if (typeof msg.seq === "number") S.lastSeqIn = msg.seq;   // consume only on a recognized op
       renderAll(); syncSnapBox();
+    } else {
+      // Unknown op: don't consume seq (so a future op envelope can be resent).
+      console.warn("[R2R] unknown inbound op", msg && msg.op);
     }
   }
   function endInteract() {
@@ -191,9 +203,14 @@
   }
   // ---- track ops (client-side; persist through the same commit() payload) ----
   function reindexTracks() { (S.edit.tracks || []).forEach(function (t, i) { t.index = i; }); }
+  function lastOfKind(id) {                         // is `id` the last track of its kind?
+    var ts = S.edit.tracks || [], t = trackById(id);
+    if (!t) return true;
+    return ts.filter(function (x) { return (x.kind || "Video") === (t.kind || "Video"); }).length <= 1;
+  }
   function deleteTrack(id) {                       // mirrors timeline.remove_track
     var ts = S.edit.tracks || [];
-    if (ts.length <= 1) return;                     // keep at least one track
+    if (ts.length <= 1 || lastOfKind(id)) return;   // keep at least one track of this kind
     var gone = {};
     S.edit.clips = (S.edit.clips || []).filter(function (c) {
       if (c.track === id) { gone[c.id] = 1; return false; } return true;
@@ -246,7 +263,7 @@
       ["Rename", function () { renameTrack(t); }],
       ["Move up", function () { moveTrack(t.id, -1); }, i <= 0],
       ["Move down", function () { moveTrack(t.id, 1); }, i >= ts.length - 1],
-      ["Delete track", function () { deleteTrack(t.id); }, ts.length <= 1],
+      ["Delete track", function () { deleteTrack(t.id); }, ts.length <= 1 || lastOfKind(t.id)],
       ["sep"],
       ["＋ Video track", function () { clickGr("r2r-addv"); }],
       ["＋ Audio track", function () { clickGr("r2r-adda"); }]
@@ -391,7 +408,11 @@
       if (S.video.getAttribute("data-src") !== hit.url) {
         S.video.setAttribute("data-src", hit.url); S.video.src = hit.url;
       }
-      var ct = (hit.in || 0) + ((ph - hit.start) * (hit.speed || 1));
+      // Reversed clips play their source backwards — mirror the source time and
+      // clamp to [in, out] so the scrub preview matches the export.
+      var off = (ph - hit.start) * (hit.speed || 1);
+      var ct = hit.reverse ? ((hit.out || 0) - off) : ((hit.in || 0) + off);
+      ct = Math.max(hit.in || 0, Math.min(hit.out || ct, ct));
       if (S.video.readyState >= 1) { try { S.video.currentTime = ct; } catch (e) {} }
       else {
         S.video.addEventListener("loadedmetadata", function onm() {
@@ -485,29 +506,55 @@
         var ns = snapVal(Math.max(0, start0 + ds));
         var delta = ns - start0;
         if (group) {
+          // Mutate only the affected clips' transforms during the drag (a full
+          // renderAll() ~60×/sec thrashes the DOM); defer renderAll() to up().
           Object.keys(group).forEach(function (id) {
-            var cc = clipById(id); if (cc) cc.start = Math.max(0, group[id] + delta);
+            var cc = clipById(id); if (!cc) return;
+            cc.start = Math.max(0, group[id] + delta);
+            var dom = S.lanes && S.lanes.querySelector('.r2r-clip[data-id="' + id + '"]');
+            if (dom) dom.style.transform = "translateX(" + sec2px(cc.start) + "px)";
           });
-          renderAll();
+          var glane = laneAt(e.clientY); if (glane) dropTrack = glane;   // allow cross-track
         } else {
           c.start = ns;
           el.style.transform = "translateX(" + sec2px(c.start) + "px)";
           var lane = laneAt(e.clientY); if (lane) dropTrack = lane;
         }
       } else if (mode === "l") {
-        var ni = Math.min(out0 - 1 / (S.edit.fps || 24), Math.max(0, in0 + ds));
+        var ni = Math.min(out0 - 1 / (S.edit.fps || 30), Math.max(0, in0 + ds));
         c.in = ni; c.start = Math.max(0, start0 + (ni - in0)); c.dur = c.out - c.in;
         el.style.transform = "translateX(" + sec2px(c.start) + "px)";
         el.style.width = Math.max(8, sec2px(c.dur)) + "px";
       } else if (mode === "r") {
-        c.out = Math.max(c.in + 1 / (S.edit.fps || 24), out0 + ds); c.dur = c.out - c.in;
+        c.out = Math.max(c.in + 1 / (S.edit.fps || 30), out0 + ds); c.dur = c.out - c.in;
         el.style.width = Math.max(8, sec2px(c.dur)) + "px";
       }
     }
     function up() {
       window.removeEventListener("pointermove", move);
       var trackChanged = false;
-      if (mode === "move" && dropTrack && dropTrack !== c.track) {
+      if (mode === "move" && group && dropTrack && dropTrack !== c.track) {
+        // Group cross-track move: shift every selected clip by the SAME same-kind
+        // track-index delta as the anchor clip; skip any whose destination would be a
+        // different kind or out of range.
+        var ts = S.edit.tracks || [];
+        var kindList = function (kind) {
+          return ts.filter(function (x) { return (x.kind || "Video") === kind; });
+        };
+        var anchorT = trackById(c.track), destT = trackById(dropTrack);
+        if (anchorT && destT && anchorT.kind === destT.kind) {
+          var kl = kindList(anchorT.kind);
+          var delta = kl.indexOf(destT) - kl.indexOf(anchorT);
+          if (delta !== 0) {
+            Object.keys(group).forEach(function (id) {
+              var cc = clipById(id); if (!cc) return;
+              var ck = kindList(trackById(cc.track) ? trackById(cc.track).kind : "");
+              var src = trackById(cc.track), si = ck.indexOf(src), di = si + delta;
+              if (src && di >= 0 && di < ck.length) { cc.track = ck[di].id; trackChanged = true; }
+            });
+          }
+        }
+      } else if (mode === "move" && dropTrack && dropTrack !== c.track) {
         var tt = trackById(dropTrack);     // only move between same-kind lanes
         if (tt && tt.kind === c.kind) { c.track = dropTrack; trackChanged = true; }
       }
@@ -533,8 +580,13 @@
   }
   function selection() {
     var ui = S.edit.ui || {};
-    return ui.selection && ui.selection.length ? ui.selection
-      : (ui.selected ? [ui.selected] : []);
+    // Drop ids no longer present in clips() (a server op may have deleted/replaced
+    // them, leaving ui.selection stale); fall back to ui.selected only if it's present.
+    var present = {};
+    clips().forEach(function (c) { present[c.id] = 1; });
+    var sel = (ui.selection || []).filter(function (id) { return present[id]; });
+    if (sel.length) return sel;
+    return (ui.selected && present[ui.selected]) ? [ui.selected] : [];
   }
   function relayCtx(v) {
     var b = document.querySelector("#reel2reel-ctx-relay textarea, #reel2reel-ctx-relay input");
@@ -896,9 +948,9 @@
     else if (k === "z" && e.shiftKey && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); zoomToSelection(); }
     else if (k === "f") { e.preventDefault(); fit(); }
     else if (k === "r" && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); toggleRazor(); }
-    else if (k === "l") { e.preventDefault(); play(); }
-    else if (k === "k") { e.preventDefault(); stop(); commit(); }
-    else if (k === "j") { e.preventDefault(); stop(); setPlayhead(ph() - 1); commit(); }
+    else if (k === "l" && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); play(); }
+    else if (k === "k" && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); stop(); commit(); }
+    else if (k === "j" && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); stop(); setPlayhead(ph() - 1); commit(); }
     else if (k === "arrowleft") { e.preventDefault(); setPlayhead(ph() - 1 / (S.edit.fps || 30)); commit(); }
     else if (k === "arrowright") { e.preventDefault(); setPlayhead(ph() + 1 / (S.edit.fps || 30)); commit(); }
     else if ((e.ctrlKey || e.metaKey) && k === "z" && !e.shiftKey) { e.preventDefault(); clickGr("r2r-undo"); }

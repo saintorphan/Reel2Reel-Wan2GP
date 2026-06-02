@@ -105,9 +105,12 @@ _CTX_MENU_JS = (
     "if(!hits.length)return;e.preventDefault();build(e.clientX,e.clientY,hits);},true);"
     "document.addEventListener('click',close);document.addEventListener('scroll',close,true);}"
     "var M=window.SaintorphanMenu;if(!M._reel2reel){M._reel2reel=true;M.announce('reel2reel');"
+    # Monotonic ctxSeq (matches timeline.js relayCtx) so repeats still fire .change.
+    "M._ctxSeq=M._ctxSeq||0;"
     "var relay=function(v){var b=document.querySelector('#reel2reel-ctx-relay textarea')"
     "||document.querySelector('#reel2reel-ctx-relay input');"
-    "if(b){b.value=v+'|'+Date.now();b.dispatchEvent(new Event('input',{bubbles:true}));}};"
+    "if(b){M._ctxSeq++;b.value=v+'|'+M._ctxSeq;b.dispatchEvent(new Event('input',{bubbles:true}));}"
+    "else{console.warn('[R2R] ctx relay not present — Reel2Reel Library menu item is a no-op.');}};"
     "var toG=function(el){var s=M.srcOf(el);if(s)relay('global|'+s);};"
     "var toP=function(el){var s=M.srcOf(el);if(s)relay('project|'+s);};"
     # Generic 'image'/'video' items let the user right-click ANY image elsewhere in the
@@ -142,7 +145,12 @@ class Reel2Reel(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
         self.name = PLUGIN_NAME
-        self.version = "0.4.0"
+        # Single source of truth: read the version from plugin_info.json at runtime.
+        try:
+            self.version = json.loads(
+                (Path(__file__).parent / "plugin_info.json").read_text()).get("version", "0.0.0")
+        except Exception:
+            self.version = "0.0.0"
         self.description = ("Multi-track timeline editor: arrange AI clips on "
                             "video/audio tracks, detach/edit audio, transitions, "
                             "projects with versioning, a media library, a shared "
@@ -162,6 +170,7 @@ class Reel2Reel(WAN2GPPlugin):
         self._ctx_out: list[str] = []      # context-menu relay output order
         self._cancel_event = threading.Event()
         self._clipboard: dict | None = None
+        self._probe_warned = False         # one-time 'ffprobe missing' notice
 
     # -- lifecycle ----------------------------------------------------------
     def setup_ui(self):
@@ -178,19 +187,15 @@ class Reel2Reel(WAN2GPPlugin):
         try:
             tw.register_static_paths([
                 paths.renders_dir(), paths.thumbs_dir(), paths.norm_dir(),
-                paths.wan2gp_outputs_dir()])
+                paths.uploads_dir(), paths.luts_dir(), paths.wan2gp_outputs_dir()])
         except Exception:
             traceback.print_exc()
 
         self.request_component("state")
         self.request_component("main_tabs")
         self.request_component("refresh_form_trigger")
-        self.request_component("image_start")
-        self.request_component("image_start_row")
-        self.request_component("image_prompt_type_radio")
         self.request_global("server_config")
         self.request_global("get_video_info")
-        self.request_global("get_video_frame")
         self.request_global("get_current_model_settings")
 
         self.add_tab(tab_id=PLUGIN_ID, label=PLUGIN_NAME,
@@ -273,10 +278,19 @@ class Reel2Reel(WAN2GPPlugin):
         self._seq += 1
         return json.dumps({"seq": self._seq, "op": "load", "edit": self._edit_payload()})
 
-    def _content_sig(self) -> str:
-        d = timeline.to_document(self._project)
+    @staticmethod
+    def _sig_of(tl) -> str:
+        """Content signature for undo/autosave diffing — excludes ``ui`` (selection,
+        playhead) and per-track ``height`` so a collapse/resize view-toggle never flips
+        the doc signature (no junk undo states / per-toggle autosave)."""
+        d = timeline.to_document(tl)
         d.pop("ui", None)
+        for t in d.get("tracks", []):
+            t.pop("height", None)
         return json.dumps(d, sort_keys=True)
+
+    def _content_sig(self) -> str:
+        return self._sig_of(self._project)
 
     def _env_after(self) -> str:
         """Build a reload envelope and re-baseline the undo signature (call after
@@ -311,7 +325,7 @@ class Reel2Reel(WAN2GPPlugin):
 
     def _bin_thumb(self, path):
         cid = f"bin_{abs(hash(path)) % 10**8}"
-        return discovery.thumbnail(path, cid, getattr(self, "get_video_frame", None))
+        return discovery.thumbnail(path, cid)
 
     def _gallery_value(self, items, view_attr):
         view, gallery = [], []
@@ -355,7 +369,26 @@ class Reel2Reel(WAN2GPPlugin):
             fs = render.filmstrip(clip.src, clip.in_, clip.out, dest)
             if fs:
                 return fs
-        return discovery.thumbnail(clip.src, clip.id, getattr(self, "get_video_frame", None))
+        return discovery.thumbnail(clip.src, clip.id)
+
+    def _adopt_timebase(self, info):
+        """First clip on an empty timeline adopts its fps + resolution (then it's the
+        locked sequence timebase; later clips conform on export). Skip when the clip
+        wasn't actually probed (e.g. ffprobe missing) so we don't lock in a 0/None
+        timebase — keep the existing defaults and warn once."""
+        if any(t.clips for t in self._project.tracks):
+            return
+        if not info.get("probed"):
+            if not self._probe_warned:
+                self._probe_warned = True
+                gr.Info("ffprobe missing — clip metadata unavailable; using timeline "
+                        "defaults; install ffprobe for accurate fps/size.")
+            return
+        if info.get("fps"):
+            self._project.fps = _snap_fps(info["fps"])
+        if info.get("width") and info.get("height"):
+            self._project.width = int(info["width"])
+            self._project.height = int(info["height"])
 
     def _ingest_clip(self, path: str, force_kind: str = "auto"):
         if not path or not Path(path).exists():
@@ -363,15 +396,7 @@ class Reel2Reel(WAN2GPPlugin):
         k = discovery.kind_of(path) or "video"
         track_kind = "Audio" if (k == "audio" or force_kind == "Audio") else "Video"
         info = discovery.probe_clip(path, getattr(self, "get_video_info", None))
-        # First clip on an empty timeline adopts its fps + resolution (then it's the
-        # locked sequence timebase; later clips conform on export). Override via the
-        # timeline's FPS / size fields or "Match highest fps".
-        if not any(t.clips for t in self._project.tracks):
-            if info.get("fps"):
-                self._project.fps = _snap_fps(info["fps"])
-            if info.get("width") and info.get("height"):
-                self._project.width = int(info["width"])
-                self._project.height = int(info["height"])
+        self._adopt_timebase(info)
         dur = info.get("dur") or 5.0
         clip = self._project.append_clip(
             path, kind=track_kind, in_=0.0, out=float(dur), src_dur=info.get("dur"),
@@ -392,12 +417,7 @@ class Reel2Reel(WAN2GPPlugin):
         k = discovery.kind_of(path) or "video"
         need = "Audio" if (k == "audio" or force_kind == "Audio") else "Video"
         info = discovery.probe_clip(path, getattr(self, "get_video_info", None))
-        if not any(t.clips for t in self._project.tracks):
-            if info.get("fps"):
-                self._project.fps = _snap_fps(info["fps"])
-            if info.get("width") and info.get("height"):
-                self._project.width = int(info["width"])
-                self._project.height = int(info["height"])
+        self._adopt_timebase(info)
         if track_id == "NEW":
             track = self._project.add_track(need)
         else:
@@ -486,7 +506,7 @@ class Reel2Reel(WAN2GPPlugin):
             elif cmd in ("csplit", "cdel", "cdup", "cdetach", "copy", "cut", "paste",
                          "delsel", "razor", "clip2pbin", "clip2gbin"):
                 upd["status"] = self._clip_action(cmd, payload, upd)
-            elif cmd in ("libadd", "libdrop", "libpbin", "libgbin", "librm", "libdel"):
+            elif cmd in ("libadd", "libdrop", "libpbin", "libgbin", "librm"):
                 upd["status"] = self._lib_action(cmd, payload, upd)
         return upd[names[0]] if len(names) == 1 else tuple(upd[n] for n in names)
 
@@ -510,20 +530,6 @@ class Reel2Reel(WAN2GPPlugin):
             self._push_undo(); self._ingest_at(path, track_id=track, start=t)
             upd["tl"] = self._env_after()
             return f"Dropped **{name}** onto the timeline."
-        if cmd == "libdel":                       # delete the actual file from disk
-            try:
-                Path(path).unlink()
-            except Exception as e:
-                return f"Couldn't delete {name}: {e}"
-            self._bin = [p for p in self._bin if p != path]
-            self._gbin = [p for p in self._gbin if p != path]
-            if self._project_name:
-                projects.set_bin(self._project_name, self._bin)
-            projects.set_global_bin(self._gbin)
-            g, _ = self._refresh_library()
-            upd["outputs"] = g; upd["bin"] = self._bin_value(); upd["global"] = self._gbin_value()
-            gr.Info(f"Deleted {name} from disk.")
-            return f"Deleted **{name}** from disk."
         if cmd == "libpbin":
             self._bin = self._dedup(self._bin + [path])
             if self._project_name:
@@ -561,7 +567,7 @@ class Reel2Reel(WAN2GPPlugin):
             self._clipboard = self._project.serialize_clips(ids)
             self._push_undo()
             n = self._project.remove_clips(ids)
-            self._project.ui["selected"] = None
+            self._set_selection([])
             upd["tl"] = self._env_after()
             return f"Cut {n} clip(s)."
         if cmd == "paste":
@@ -569,6 +575,7 @@ class Reel2Reel(WAN2GPPlugin):
                 return "Clipboard is empty."
             self._push_undo()
             new = self._project.paste_clips(self._clipboard, at=ph)
+            self._set_selection(new)
             upd["tl"] = self._env_after()
             return f"Pasted {len(new)} clip(s) at {ph:.2f}s."
         if cmd == "razor":                       # razor tool: cut clip at a clicked time
@@ -591,7 +598,7 @@ class Reel2Reel(WAN2GPPlugin):
                 return "Nothing selected."
             self._push_undo()
             n = self._project.remove_clips(ids)
-            self._project.ui["selected"] = None
+            self._set_selection([])
             upd["tl"] = self._env_after()
             return f"Deleted {n} clip(s)."
         if cmd in ("clip2pbin", "clip2gbin"):     # send a timeline clip back to a bin
@@ -617,12 +624,12 @@ class Reel2Reel(WAN2GPPlugin):
             msg = f"Split at {ph:.2f}s ({n} new)." if n else "Playhead isn't over this clip."
         elif cmd == "cdel":
             self._project.remove_clip(clip.id)
-            self._project.ui["selected"] = None
+            self._set_selection([])
             msg = "Deleted clip."
         elif cmd == "cdup":
             nid = self._project.duplicate_clip(clip.id)
             if nid:
-                self._project.ui["selected"] = nid
+                self._set_selection(nid)
             msg = "Duplicated clip."
         elif cmd == "cdetach":
             if track.kind == "Video" and clip.has_audio:
@@ -757,14 +764,15 @@ class Reel2Reel(WAN2GPPlugin):
             return None
 
     def _lib_upload(self, f, which):
-        """Import an uploaded file into a bin (copied into renders_dir so it persists)."""
+        """Import an uploaded file into a bin (copied into uploads_dir so it persists
+        and survives a clear-cache that wipes renders)."""
         import shutil
         src = f if isinstance(f, str) else getattr(f, "name", None)
         if not src or not Path(src).exists():
             return gr.update(), gr.update(value="Upload failed — no file received.")
-        dest = paths.renders_dir() / Path(src).name
+        dest = paths.uploads_dir() / Path(src).name
         try:
-            paths.renders_dir().mkdir(parents=True, exist_ok=True)
+            paths.uploads_dir().mkdir(parents=True, exist_ok=True)
             if str(Path(src).resolve()) != str(dest.resolve()):
                 shutil.copy2(src, dest)
             path = str(dest)
@@ -779,7 +787,7 @@ class Reel2Reel(WAN2GPPlugin):
             if self._project_name:
                 projects.set_bin(self._project_name, self._bin)
             return self._bin_value(), gr.update(value=f"Imported **{name}** to the project bin.")
-        g, _ = self._refresh_library()      # outputs: it now lives in renders_dir → rescan
+        g, _ = self._refresh_library()      # outputs: uploads_dir is scanned → rescan
         return g, gr.update(value=f"Imported **{name}**.")
 
     # -- media bins (add / copy / remove are now thumbnail right-click verbs:
@@ -801,8 +809,7 @@ class Reel2Reel(WAN2GPPlugin):
         items = discovery.list_importable(self._server_config())
         gallery = []
         for it in items:
-            thumb = discovery.thumbnail(it["path"], f"lib_{abs(hash(it['path'])) % 10**8}",
-                                        getattr(self, "get_video_frame", None))
+            thumb = discovery.thumbnail(it["path"], f"lib_{abs(hash(it['path'])) % 10**8}")
             it = {**it, "thumb": thumb}
             self._library.append(it)
             gallery.append((thumb or it["path"], it["name"]))
@@ -906,8 +913,7 @@ class Reel2Reel(WAN2GPPlugin):
         except Exception:
             logger.debug("bad timeline payload", exc_info=True)
             return self._inspector_values()
-        new_sig = json.dumps({k: v for k, v in timeline.to_document(new).items()
-                              if k != "ui"}, sort_keys=True)
+        new_sig = self._sig_of(new)
         changed = new_sig != self._last_sig
         if changed:
             self._undo.append(json.dumps(timeline.to_document(self._project)))
@@ -921,6 +927,16 @@ class Reel2Reel(WAN2GPPlugin):
             except Exception:
                 pass
         return self._inspector_values()
+
+    def _set_selection(self, ids):
+        """Write BOTH ui['selected'] and ui['selection'] so JS selection() (which
+        prefers ui.selection) stays in sync after a server mutation. ``ids`` is a list
+        of clip ids (or a single id); pass [] to clear."""
+        if isinstance(ids, str):
+            ids = [ids]
+        ids = [i for i in (ids or []) if i]
+        self._project.ui["selection"] = list(ids)
+        self._project.ui["selected"] = ids[0] if ids else None
 
     def _sel(self):
         return self._project.find_clip((self._project.ui or {}).get("selected"))
@@ -1088,7 +1104,7 @@ class Reel2Reel(WAN2GPPlugin):
         track, sel = self._sel()
         tid = track.id if (track and track.kind == "Video") else None
         clip = self._project.add_text_clip("Title", start=ph, dur=3.0, track_id=tid)
-        self._project.ui["selected"] = clip.id
+        self._set_selection(clip.id)
         return (self._env_after(), gr.update(choices=self._track_choices()),
                 "Added a title — edit its text in the inspector.")
 
@@ -1115,7 +1131,7 @@ class Reel2Reel(WAN2GPPlugin):
             ac.thumb = self._thumb_for(ac, "audio")
         except Exception:
             pass
-        self._project.ui["selected"] = aid
+        self._set_selection(aid)
         return (self._env_after(), gr.update(choices=self._track_choices()),
                 f"Detached audio from **{clip.label or clip.id}** → {ac.track}.")
 
@@ -1126,7 +1142,7 @@ class Reel2Reel(WAN2GPPlugin):
         self._push_undo()
         nid = self._project.duplicate_clip(clip.id)
         if nid:
-            self._project.ui["selected"] = nid
+            self._set_selection(nid)
         return self._env_after(), "Duplicated clip."
 
     def _ripple_delete(self):
@@ -1135,7 +1151,7 @@ class Reel2Reel(WAN2GPPlugin):
             raise gr.Error("Select a clip first.")
         self._push_undo()
         self._project.ripple_delete(clip.id)
-        self._project.ui["selected"] = None
+        self._set_selection([])
         return self._env_after(), "Ripple-deleted (gap closed)."
 
     def _lift_delete(self):
@@ -1144,7 +1160,7 @@ class Reel2Reel(WAN2GPPlugin):
             raise gr.Error("Select a clip first.")
         self._push_undo()
         self._project.remove_clip(clip.id)
-        self._project.ui["selected"] = None
+        self._set_selection([])
         return self._env_after(), "Deleted clip (gap left)."
 
     def _add_transition(self, dur, kind, direction):
@@ -1436,14 +1452,15 @@ class Reel2Reel(WAN2GPPlugin):
                 "lut_on": bool(lut_on), "lut_path": str(lut_path or "")}
 
     def _master_lut(self, f):
-        """Persist an uploaded .cube into renders_dir and report its name."""
+        """Persist an uploaded .cube into luts_dir (NOT renders_dir, so clear-cache
+        can't wipe it) and report its name."""
         import shutil
         src = f if isinstance(f, str) else getattr(f, "name", None)
         if not src or not Path(src).exists():
             return "", "*no LUT loaded*"
-        dest = paths.renders_dir() / Path(src).name
+        dest = paths.luts_dir() / Path(src).name
         try:
-            paths.renders_dir().mkdir(parents=True, exist_ok=True)
+            paths.luts_dir().mkdir(parents=True, exist_ok=True)
             if str(Path(src).resolve()) != str(dest.resolve()):
                 shutil.copy2(src, dest)
             path = str(dest)
@@ -1522,29 +1539,45 @@ class Reel2Reel(WAN2GPPlugin):
             m_color_on, m_bright, m_contrast, m_sat, m_temp, m_loud_on, m_lufs,
             m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_interp_mode, m_interp_fps,
             m_lut_on, m_lut_path)
-        # RIFE runs as a post-encode pass; if it's selected but unavailable, fall back
-        # to ffmpeg minterpolate inside the filtergraph so the user still gets smoothing.
+        preset = preset or "mp4"
+        # RIFE re-encodes to H.264 .mp4, so it only applies to the mp4 preset — selecting
+        # it with webm/prores/gif would silently deliver an .mp4. Gate accordingly; the
+        # minterpolate fallback (inside the filtergraph) likewise only runs for mp4.
         mode = master.get("interp", "off")
-        use_rife = mode in ("rife2", "rife4") and rife.available()
-        if mode in ("rife2", "rife4") and not use_rife:
-            master["interp"] = "minterpolate"
+        use_rife = mode in ("rife2", "rife4") and rife.available() and preset == "mp4"
+        if mode in ("rife2", "rife4"):
+            if preset != "mp4":
+                gr.Info("RIFE only applies to the mp4 preset; exported without interpolation.")
+                master["interp"] = "off"
+            elif not use_rife:
+                master["interp"] = "minterpolate"     # fall back so the user still gets smoothing
         self._project.master = master
         if master.get("color_on") and self._graded_clips():
             gr.Warning("Master grade stacks on per-clip grades — check the Finish → "
                        "Consistency panel if the result looks over-processed.")
-        self._cancel_event.clear()
+        # LUT path validation: warn (don't abort) when the chosen .cube is missing —
+        # effects.master_vf will skip it, so the render still succeeds.
+        if master.get("lut_on"):
+            lp = str(master.get("lut_path") or "").strip()
+            if not lp or not Path(lp).is_file():
+                gr.Warning("LUT file not found — rendering without it.")
+        # Per-invocation cancel Event so a Preview cancel can't kill this Export (and
+        # vice-versa); publish it so _cancel_render targets the latest job.
+        ev = threading.Event()
+        self._cancel_event = ev
         w = h = None
         if resolution and "x" in str(resolution).lower():
             try:
                 w, h = (int(x) for x in str(resolution).lower().split("x")[:2])
             except Exception:
                 w = h = None
-        start = float(rstart) if (range_on and rstart) else None
+        # `is not None` so an explicit 0.0 start is honored (not coerced to None).
+        start = float(rstart) if (range_on and rstart is not None) else None
         end = float(rend) if (range_on and rend and float(rend) > 0) else None
         try:
-            out = render.export(self._project, preset=preset or "mp4",
+            out = render.export(self._project, preset=preset,
                                 quality=quality or "high", width=w, height=h,
-                                start=start, end=end, cancel=self._cancel_event,
+                                start=start, end=end, cancel=ev,
                                 progress_cb=lambda f, d: progress(f, desc=d))
         except render.RenderError as e:
             return gr.update(), gr.update(), f"❌ {e}"
@@ -1559,9 +1592,14 @@ class Reel2Reel(WAN2GPPlugin):
                                       progress=lambda f, d: progress(f, desc=d))
             if r:
                 out = r; msg = f"✅ Rendered + RIFE ×{2 ** exp} `{out}`"
+            elif getattr(rife, "last_error", "") == "too_large":
+                gr.Warning("This cut is too large for RIFE — exported without "
+                           "interpolation (try minterpolate).")
+            elif getattr(rife, "last_error", "") == "failed":
+                gr.Warning("RIFE interpolation failed — exported without it.")
             else:
-                gr.Warning("RIFE unavailable or the cut was too long for it — "
-                           "exported without interpolation (try minterpolate).")
+                gr.Warning("RIFE unavailable — exported without interpolation "
+                           "(try minterpolate).")
         self._last_render = out
         return out, gr.update(value=out), msg
 
@@ -1583,7 +1621,9 @@ class Reel2Reel(WAN2GPPlugin):
         if master.get("interp") in ("rife2", "rife4"):
             master["interp"] = "minterpolate"
         self._project.master = master
-        self._cancel_event.clear()
+        # Fresh per-invocation cancel Event (don't share with an in-flight Export).
+        ev = threading.Event()
+        self._cancel_event = ev
         ph = float((self._project.ui or {}).get("playhead", 0.0))
         secs = float(secs or 8)
         pw = 480
@@ -1592,7 +1632,7 @@ class Reel2Reel(WAN2GPPlugin):
             out = render.export(
                 self._project, out_path=str(paths.cache_dir() / "preview.mp4"),
                 preset="mp4", quality="low", width=pw, height=phh,
-                start=ph, end=ph + secs, cancel=self._cancel_event,
+                start=ph, end=ph + secs, cancel=ev,
                 progress_cb=lambda f, d: progress(f, desc="Preview: " + d))
         except render.RenderError as e:
             return gr.update(), f"❌ {e}"
@@ -1645,11 +1685,24 @@ class Reel2Reel(WAN2GPPlugin):
 
     def _wire_settings(self, s, pages):
         def _save_dirs(projects, renders, outputs):
+            # Validate BEFORE persisting; a bad/over-broad dir must never be saved or
+            # registered as static-servable. An empty box is a no-op (None) so blanking
+            # a field can't silently wipe a configured override.
+            fields = [("Projects dir", (projects or "").strip()),
+                      ("Renders dir", (renders or "").strip()),
+                      ("Import-from dir", (outputs or "").strip())]
+            for label, val in fields:
+                err = paths.validate_dir(val)
+                if err:
+                    return (f"⚠️ {label}: {err} — not saved.", gr.update(),
+                            settings_panel.ffmpeg_md())
             try:
-                paths.set_dirs(projects=projects or None, renders=renders or None,
-                               wan2gp_outputs=outputs or None)
-                tw.register_static_paths([paths.renders_dir(), paths.thumbs_dir(),
-                                          paths.wan2gp_outputs_dir()])
+                paths.set_dirs(projects=(projects or "").strip() or None,
+                               renders=(renders or "").strip() or None,
+                               wan2gp_outputs=(outputs or "").strip() or None)
+                tw.register_static_paths([
+                    paths.renders_dir(), paths.thumbs_dir(), paths.norm_dir(),
+                    paths.uploads_dir(), paths.luts_dir(), paths.wan2gp_outputs_dir()])
                 status = "✅ Directories saved & created."
             except Exception as e:
                 status = f"⚠️ Could not save directories: {e}"

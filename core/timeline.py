@@ -19,8 +19,6 @@ offline.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Optional
@@ -212,6 +210,10 @@ class Timeline:
         t = self.get_track(track_id)
         if t is None or len(self.tracks) <= 1:
             return False
+        # Keep at least one track of THIS kind — removing the last Video (or Audio)
+        # track yields a black (or silent) export.
+        if sum(1 for x in self.tracks if x.kind == t.kind) <= 1:
+            return False
         clip_ids = {c.id for c in t.clips}
         self.tracks.remove(t)
         self.transitions = [x for x in self.transitions
@@ -398,13 +400,26 @@ class Timeline:
         created: list[str] = []
         for clip in list(track.clips):
             if clip.start < t < clip.end and clip.dur > 1.0 / self.fps:
-                src_off = (t - clip.start) * clip.speed_f      # source seconds into clip
+                cut_t = t - clip.start                          # clip-relative split offset (s)
+                src_off = cut_t * clip.speed_f                  # source seconds into clip
                 right = Clip(**{**asdict(clip), "id": self._fresh_id("c"), "start": t,
                                "in_": clip.in_ + src_off, "fade_in": 0.0})
                 clip.out = clip.in_ + src_off
                 clip.fade_out = 0.0
                 clip.fade_in = min(clip.fade_in, clip.dur)      # halves are shorter now
                 right.fade_out = min(right.fade_out, right.dur)
+                # keyframes are clip-relative seconds {prop: [[t, v], ...]}; partition them
+                # around the cut so neither half carries automation outside its new window.
+                left_kf, right_kf = {}, {}
+                for prop, pts in (clip.keyframes or {}).items():
+                    lp = [[kt, v] for kt, v in pts if kt <= cut_t]
+                    rp = [[kt - cut_t, v] for kt, v in pts if kt >= cut_t]
+                    if lp:
+                        left_kf[prop] = lp
+                    if rp:
+                        right_kf[prop] = rp
+                clip.keyframes = left_kf or None
+                right.keyframes = right_kf or None
                 track.clips.append(right)
                 created.append(right.id)
         track.clips.sort(key=lambda c: c.start)
@@ -430,7 +445,9 @@ class Timeline:
                 continue
             cd = {**cd, "id": self._fresh_id("c"), "track": track.id,
                   "start": max(0.0, at + (float(cd.get("start", 0.0)) - base))}
-            cd.pop("in", None)
+            # NB: do NOT pop "in_" — that is the real source in-point from asdict();
+            # _clip_from_dict reads it (with a legacy "in" fallback). Popping it lost
+            # the trim on copy/paste.
             clip = _clip_from_dict(cd, track.id)
             track.clips.append(clip)
             out.append(clip.id)
@@ -569,6 +586,7 @@ class Timeline:
                     "reverse": c.reverse, "color": c.color, "geometry": c.geometry,
                     "text": c.text, "keyframes": c.keyframes, "kind": t.kind,
                     "thumb": c.thumb, "thumb_url": None, "src_fps": c.src_fps,
+                    "src_dur": c.src_dur,
                 })
         return {
             "name": self.name, "fps": self.fps, "width": self.width,
@@ -600,18 +618,26 @@ class Timeline:
         if not tl.tracks:
             tl.add_track("Video", "Video 1")
         for cd in d.get("clips", []):
-            track = tl.get_track(cd.get("track", "")) or tl.tracks[0]
+            track = tl.get_track(cd.get("track", ""))
+            if track is None:
+                # Route a clip whose named track is missing by KIND, not blindly onto
+                # tracks[0] (which could misclassify a Video clip onto an Audio track).
+                kind = cd.get("kind")
+                if kind not in ("Video", "Audio"):
+                    kind = "Audio" if Path(str(cd.get("src", ""))).suffix.lower() in \
+                        {".wav", ".mp3", ".m4a", ".aac", ".flac", ".ogg", ".opus"} else "Video"
+                track = tl.first_track(kind) or tl.first_track("Video") or tl.tracks[0]
             track.clips.append(_clip_from_dict(cd, track.id))
         for x in d.get("transitions", []):
             tl.transitions.append(_transition_from_dict(x))
         for m in d.get("markers", []):
-            tl.markers.append(Marker(id=m["id"], t=_f(m.get("t", 0.0)),
+            tl.markers.append(Marker(id=m.get("id") or new_id("m"), t=_f(m.get("t", 0.0)),
                                      label=m.get("label", ""), color=m.get("color", "#e0a106")))
         return tl.sanitize()
 
 
 def _track_from_dict(td: dict, fallback_index: int) -> Track:
-    return Track(id=td["id"], kind=td.get("kind", "Video"),
+    return Track(id=td.get("id") or new_id("V"), kind=td.get("kind", "Video"),
                  index=int(td.get("index", fallback_index)), name=td.get("name", ""),
                  muted=bool(td.get("muted")), solo=bool(td.get("solo")),
                  locked=bool(td.get("locked")), volume_db=_f(td.get("volume_db", 0.0)),
@@ -619,15 +645,19 @@ def _track_from_dict(td: dict, fallback_index: int) -> Track:
 
 
 def _transition_from_dict(x: dict) -> Transition:
-    return Transition(id=x["id"], track=x.get("track", ""), kind=x.get("kind", "dissolve"),
-                      between=tuple(x.get("between", ("", ""))),
+    # Normalize 'between' to exactly two elements — a corrupt/external transition
+    # with a short tuple would IndexError on every x.between[0]/[1] access downstream.
+    b = list(x.get("between", ("", "")))
+    between = (b[0] if b else "", b[1] if len(b) > 1 else "")
+    return Transition(id=x.get("id") or new_id("x"), track=x.get("track", ""),
+                      kind=x.get("kind", "dissolve"), between=between,
                       position=_f(x.get("position", 0.0)), duration=_f(x.get("duration", 0.5), 0.5),
                       direction=x.get("direction", "left"))
 
 
 def _clip_from_dict(cd: dict, track_id: str) -> Clip:
     return Clip(
-        id=cd["id"], src=cd.get("src", ""), start=_f(cd.get("start", 0.0)),
+        id=cd.get("id") or new_id("c"), src=cd.get("src", ""), start=_f(cd.get("start", 0.0)),
         in_=_f(cd.get("in_", cd.get("in", 0.0))), out=_f(cd.get("out", 0.0)),
         track=track_id, label=cd.get("label", ""), type=cd.get("type", "media"),
         gain_db=_f(cd.get("gain_db", 0.0)), fade_in=_f(cd.get("fade_in", 0.0)),
@@ -681,24 +711,17 @@ def from_document(doc: dict) -> Timeline:
     for x in doc.get("transitions", []):
         tl.transitions.append(_transition_from_dict(x))
     for m in doc.get("markers", []):
-        tl.markers.append(Marker(id=m["id"], t=_f(m.get("t", 0.0)),
+        tl.markers.append(Marker(id=m.get("id") or new_id("m"), t=_f(m.get("t", 0.0)),
                                  label=m.get("label", ""), color=m.get("color", "#e0a106")))
     return tl.sanitize()
 
 
 def _atomic_write(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(text)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    """Durable atomic write (temp + flush + fsync + os.replace + dir fsync). Delegates
+    to the shared paths.atomic_write_text so timeline + the project sidecars share one
+    crash-safe writer."""
+    from . import paths
+    paths.atomic_write_text(path, text)
 
 
 def save(path, tl: Timeline) -> str:

@@ -89,13 +89,18 @@ Two ways:
    When you switch to the Reel2Reel tab, the queued clips drop straight onto the
    timeline — no button press.
 
+   > **Import contract:** `from reel2reel.inbox import enqueue_clips` requires the
+   > host to expose this plugin dir importable as `reel2reel` — the on-disk hyphenated
+   > folder name (`Reel2Reel-Wan2GP`) is not a valid module name, so senders rely on
+   > the host's `sys.path` setup aliasing it to `reel2reel`.
+
 ## Design notes
 
 - **Data model** emulates [OpenTimelineIO](https://opentimelineio.readthedocs.io/)'s
   frame-rate-aware hierarchy (Timeline → Tracks → Clips) for loss-free,
   interchange-friendly persistence, while the live edit-state is a flat,
   explicit-position clip list that's trivial to drag. Projects save as
-  `Reel2ReelProject.1` JSON; canonical `.otio` export is an additive adapter.
+  `Reel2ReelProject.2` JSON; canonical `.otio` export is an additive adapter.
 - **Timeline UI** is a hand-rolled, no-build, vanilla-JS DOM editor delivered via
   Gradio's on-load `js=` hook, round-tripping state through two hidden textbox
   JSON pipes. Fully offline; no npm, no CDN.
@@ -137,7 +142,7 @@ Drop banner artwork at `assets/reel2reel_logo.png` (base64-embedded top-right).
 
 ## Status
 
-v0.3.0. **Working:**
+v0.4.0. **Working:**
 
 - Loads as a Wan2GP tab (**green** tab color-coding) with the shared
   `SaintorphanMenu` right-click engine + `announce('reel2reel')`.

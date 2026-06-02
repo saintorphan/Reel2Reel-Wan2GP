@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core import timeline, otio, render, projects, paths  # noqa: E402
+from core import timeline, otio, render, projects, paths, discovery, inbox  # noqa: E402,F401
 
 
 def _tl():
@@ -28,6 +28,19 @@ def _tl():
     tl.add_clip(timeline.Clip(id="a1", src="/tmp/m.wav", start=0.0, in_=0.0, out=6.5,
                               track=a.id, label="music", gain_db=-3.0))
     return tl
+
+
+def _lavfi(d, name, color="green", dur=1.0, audio=True):
+    """Synthesize a tiny clip via ffmpeg's lavfi test sources (audio optional)."""
+    sp = Path(d) / name
+    args = [render.ffmpeg_path(), "-y", "-f", "lavfi", "-i",
+            f"color=c={color}:s=160x120:r=24:d={dur}"]
+    if audio:
+        args += ["-f", "lavfi", "-i", f"sine=frequency=440:duration={dur}",
+                 "-shortest", "-c:a", "aac"]
+    args += ["-pix_fmt", "yuv420p", str(sp)]
+    render.run(args)
+    return str(sp)
 
 
 def test_timeline_roundtrip():
@@ -287,6 +300,166 @@ def test_render_smoke():
     print("✓ ffmpeg render smoke (2 clips -> mp4)")
 
 
+def test_edit_json_preserves_src_dur():
+    # blocker #1: src_dur is the source's true length — JS "match highest fps" and
+    # image/looping logic rely on it; it must survive the browser edit round-trip.
+    tl = timeline.Timeline(fps=24, width=320, height=240)
+    v = tl.first_track("Video")
+    tl.add_clip(timeline.Clip(id="c1", src="/tmp/a.mp4", start=0.0, in_=0.0, out=3.0,
+                              track=v.id, src_dur=5.0))
+    edit = tl.to_edit_json()
+    cd = edit["clips"][0]
+    assert "src_dur" in cd, ("to_edit_json drops src_dur", cd.keys())
+    assert cd["src_dur"] == 5.0, cd["src_dur"]
+    _, c1 = timeline.Timeline.from_edit_json(edit).find_clip("c1")
+    assert c1 and c1.src_dur == 5.0, c1.src_dur if c1 else None
+    print("✓ src_dur survives the edit-json round-trip")
+
+
+def test_export_does_not_mutate_clips():
+    # blocker #2: the overlap-fade plan must NOT write back onto the live clips —
+    # otherwise re-exporting (or previewing) compounds the auto-fades each time.
+    tl = timeline.Timeline(fps=24)
+    a = tl.first_track("Audio")
+    tl.add_clip(timeline.Clip(id="a1", src="/x.wav", start=0.0, in_=0.0, out=4.0,
+                              track=a.id, has_audio=True))
+    tl.add_clip(timeline.Clip(id="a2", src="/y.wav", start=2.0, in_=0.0, out=4.0,
+                              track=a.id, has_audio=True))     # overlaps a1 by 2s
+    _, c1 = tl.find_clip("a1")
+    _, c2 = tl.find_clip("a2")
+    before = (c1.fade_in, c1.fade_out, c2.fade_in, c2.fade_out)
+    render._augment_overlap_fades([(c1, a), (c2, a)])          # the extracted fade plan
+    after = (c1.fade_in, c1.fade_out, c2.fade_in, c2.fade_out)
+    assert after == before, ("fade plan mutated the live clips", before, after)
+    print("✓ export overlap-fade plan leaves the live clips unchanged")
+
+
+def test_load_corrupt_records():
+    # blockers #3/#4: a track/clip/transition/marker missing 'id' must load (ids
+    # minted), and a transition with a 1-element 'between' must normalize, not crash.
+    doc = {
+        "tracks": [{"kind": "Video", "clips": [{"src": "/a.mp4", "in_": 0.0, "out": 2.0}]}],
+        "transitions": [{"track": "", "between": ["x"]}],     # missing id + short between
+        "markers": [{"t": 1.0, "label": "m"}],                # missing id
+    }
+    tl = timeline.from_document(doc)                           # must not raise
+    cids = [c.id for _, c in tl.all_clips()]
+    assert all(cids) and len(cids) == 1, cids                 # clip got a minted id
+    assert all(m.id for m in tl.markers)                      # marker got a minted id
+    for x in tl.transitions:
+        assert x.id and len(x.between) == 2, (x.id, x.between)  # between normalized to a pair
+    # same leniency on the flat browser payload
+    edit = {"tracks": [{"kind": "Video"}],
+            "clips": [{"src": "/a.mp4", "in_": 0.0, "out": 2.0, "track": ""}],
+            "transitions": [{"between": ["x"]}], "markers": [{"t": 1.0}]}
+    tl2 = timeline.Timeline.from_edit_json(edit)              # must not raise
+    assert all(c.id for _, c in tl2.all_clips()) and all(m.id for m in tl2.markers)
+    print("✓ corrupt records load (ids minted, 1-element transitions normalized)")
+
+
+def test_split_keyframes():
+    # split must rebase the right half's keyframes to its own 0 and keep only the
+    # keyframes that fall inside each half's on-timeline duration.
+    tl = timeline.Timeline(fps=24, width=320, height=240)
+    v = tl.first_track("Video")
+    tl.add_clip(timeline.Clip(id="c1", src="/a.mp4", start=0.0, in_=0.0, out=4.0, track=v.id,
+                              keyframes={"opacity": [[0.0, 0.0], [1.0, 0.3],
+                                                     [2.0, 0.6], [3.0, 1.0]]}))
+    ids = tl.split_at(v.id, 2.0)                              # left 0..2, right 2..4
+    _, left = tl.find_clip("c1")
+    _, right = tl.find_clip(ids[0])
+    lk = left.keyframes["opacity"]
+    rk = right.keyframes["opacity"]
+    assert all(0.0 <= t <= left.dur + 1e-6 for t, _ in lk), lk      # left: in-range only
+    assert all(0.0 <= t <= right.dur + 1e-6 for t, _ in rk), rk     # right: in-range only
+    assert abs(rk[0][0]) < 1e-6, rk                                 # right rebased to 0
+    assert abs(rk[0][1] - 0.6) < 1e-6, rk                           # at t=2 in the source
+    print("✓ split rebases + clips keyframes to each half")
+
+
+def test_otio_full_fidelity():
+    # pairs with the OTIO fidelity fix: a transition, a marker and per-clip keyframes
+    # must all survive to_otio -> from_otio.
+    tl = timeline.Timeline(fps=24, width=320, height=240)
+    v = tl.first_track("Video")
+    tl.add_clip(timeline.Clip(id="c1", src="/a.mp4", start=0.0, in_=0.0, out=3.0, track=v.id,
+                              keyframes={"opacity": [[0.0, 0.0], [1.0, 1.0]]}))
+    tl.add_clip(timeline.Clip(id="c2", src="/b.mp4", start=3.0, in_=0.0, out=4.0, track=v.id))
+    tl.add_transition("c1", 0.5)
+    tl.add_marker(2.0, "scene 2")
+    tl2 = otio.from_otio(otio.to_otio(tl))
+    _, c1 = tl2.find_clip("c1")
+    assert c1 and c1.keyframes and c1.keyframes.get("opacity"), "OTIO lost keyframes"
+    assert len(tl2.transitions) == 1, ("OTIO lost the transition", len(tl2.transitions))
+    assert any(m.label == "scene 2" for m in tl2.markers), "OTIO lost the marker"
+    print("✓ OTIO full fidelity (transition + marker + keyframes)")
+
+
+def test_render_effects():
+    if not render.ffmpeg_path():
+        print("· render-effect smoke skipped (ffmpeg not found)")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        os.environ["REEL2REEL_DIR"] = d
+        base = _lavfi(d, "base.mp4", "blue")
+        small = _lavfi(d, "small.mp4", "red")
+        vonly = _lavfi(d, "vonly.mp4", "green", audio=False)   # no audio stream
+        img = Path(d) / "pic.png"
+        render.run([render.ffmpeg_path(), "-y", "-f", "lavfi", "-i",
+                    "color=c=white:s=160x120:d=0.1", "-frames:v", "1", str(img)])
+
+        def _render(build):
+            tl = timeline.Timeline(fps=24, width=160, height=120)
+            build(tl, tl.first_track("Video"))
+            return render.export(tl, str(Path(d) / "out.mp4"))
+
+        # PiP (positioned/scaled overlay) renders nonzero
+        def _pip(tl, v):
+            tl.add_clip(timeline.Clip(id="c1", src=base, start=0, in_=0, out=1.0,
+                                      track=v.id, has_audio=True))
+            tl.add_clip(timeline.Clip(id="p1", src=small, start=0, in_=0, out=1.0,
+                                      track=v.id, geometry={"scale": 0.4, "x": 10, "y": 10}))
+        assert Path(_render(_pip)).stat().st_size > 0
+
+        # text content with an apostrophe must survive drawtext escaping
+        def _apos(tl, v):
+            tl.add_clip(timeline.Clip(id="c1", src=base, start=0, in_=0, out=1.0,
+                                      track=v.id, has_audio=True))
+            tl.add_text_clip("It's a test", start=0, dur=1.0)
+        assert Path(_render(_apos)).stat().st_size > 0
+
+        # image clip at speed != 1 renders at its on-timeline duration (4s @2x = 2s)
+        def _imgspeed(tl, v):
+            tl.add_clip(timeline.Clip(id="c1", src=img, start=0, in_=0, out=4.0,
+                                      track=v.id, speed=2.0))
+        out = _render(_imgspeed)
+        dur = render.ffprobe_dur(out)
+        assert dur is None or abs(dur - 2.0) < 0.5, dur
+
+        # reversed clip renders
+        def _rev(tl, v):
+            tl.add_clip(timeline.Clip(id="c1", src=base, start=0, in_=0, out=1.0,
+                                      track=v.id, has_audio=True, reverse=True))
+        assert Path(_render(_rev)).stat().st_size > 0
+
+        # master LUT pointing at a missing file is skipped (render still succeeds)
+        def _lut(tl, v):
+            tl.add_clip(timeline.Clip(id="c1", src=base, start=0, in_=0, out=1.0,
+                                      track=v.id, has_audio=True))
+            tl.master = {"lut_on": True, "lut_path": str(Path(d) / "nope.cube")}
+        assert Path(_render(_lut)).stat().st_size > 0
+
+        # an audio-track clip whose source has NO audio stream must not abort the render
+        def _noaudio(tl, v):
+            tl.add_clip(timeline.Clip(id="c1", src=base, start=0, in_=0, out=1.0,
+                                      track=v.id, has_audio=True))
+            a = tl.first_track("Audio")
+            tl.add_clip(timeline.Clip(id="a1", src=vonly, start=0, in_=0, out=1.0,
+                                      track=a.id, has_audio=True))
+        assert Path(_render(_noaudio)).stat().st_size > 0
+    print("✓ render effects (PiP, apostrophe text, image-speed, reverse, missing-LUT, no-audio)")
+
+
 if __name__ == "__main__":
     test_timeline_roundtrip()
     test_split_at()
@@ -296,7 +469,13 @@ if __name__ == "__main__":
     test_clip_track_ops()
     test_transitions()
     test_model_extensions()
+    test_edit_json_preserves_src_dur()
+    test_export_does_not_mutate_clips()
+    test_load_corrupt_records()
+    test_split_keyframes()
+    test_otio_full_fidelity()
     test_projects()
     test_render_transition()
     test_render_smoke()
+    test_render_effects()
     print("\nALL PASSED")

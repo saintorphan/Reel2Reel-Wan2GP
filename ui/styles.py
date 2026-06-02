@@ -32,7 +32,6 @@ button.reel2reel-tabbtn {{ border: 2px solid #2ea043 !important; border-radius: 
 /* drawers are fixed-height and scroll vertically when they hold many clips */
 #reel2reel-root .reel2reel-gallery {{ min-height: 0 !important; }}
 #reel2reel-root .reel2reel-gallery .grid-wrap {{ overflow-y: auto !important; max-height: 240px; }}
-#reel2reel-inspector {{ border-left: 2px solid {_ACCENT_DK}; padding-left: 10px; }}
 
 /* Logo flows in the project bar (same header height as ImageSuite's 104px banner). */
 #reel2reel-banner {{ display: block; }}

@@ -7,6 +7,7 @@
   --r2r-bg: #15161a;
   --r2r-lane: #1f2128;
   --r2r-edge: #33363f;
+  --r2r-head: 132px;          /* track-head width; ruler offset + playhead origin track this */
   color: #e9e6df;
   font-size: 14px;
   user-select: none;
@@ -24,7 +25,6 @@
 }
 .r2r-tl .r2r-tools { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
 .r2r-tl .r2r-tools label { display: flex; gap: 8px; align-items: center; }
-.r2r-tl .r2r-zoom { accent-color: var(--r2r-amber); }
 
 .r2r-tl .r2r-scroll {
   position: relative; overflow-x: auto; overflow-y: hidden;
@@ -35,7 +35,7 @@
 .r2r-tl .r2r-ruler {
   position: relative; height: 26px; min-width: 600px;
   border-bottom: 1px solid var(--r2r-edge);
-  margin-left: 132px; cursor: text;          /* MUST equal .r2r-head width */
+  margin-left: var(--r2r-head); cursor: text; /* MUST equal .r2r-head width */
 }
 .r2r-tl .r2r-tick {
   position: absolute; top: 0; height: 26px;
@@ -47,7 +47,7 @@
 .r2r-tl .r2r-track { display: flex; align-items: stretch; height: 52px; }
 .r2r-tl .r2r-head {
   position: relative;
-  width: 132px; min-width: 132px; display: flex; flex-direction: column;
+  width: var(--r2r-head); min-width: var(--r2r-head); display: flex; flex-direction: column;
   justify-content: center; gap: 3px;
   padding: 0 8px; color: #c9c6bf; background: #1a1c22;
   border-right: 1px solid var(--r2r-edge); border-bottom: 1px solid var(--r2r-edge);
@@ -89,10 +89,7 @@
 .r2r-trk-menu {
   position: fixed; z-index: 100001; background: #15161a; border: 1px solid #3a3d46;
   border-radius: 8px; padding: 4px; display: flex; flex-direction: column;
-  min-width: 154px; box-shadow: 0 6px 24px rgba(0,0,0,0.5);
-}
-.r2r-trk-menu {
-  min-width: 188px;
+  min-width: 188px; box-shadow: 0 6px 24px rgba(0,0,0,0.5);
 }
 .r2r-trk-menu button {
   text-align: left; background: transparent; color: #e9e6df; border: 0;
@@ -160,7 +157,7 @@
 .r2r-tl .r2r-handle.r { right: 0; }
 
 .r2r-tl .r2r-playhead {
-  position: absolute; top: 0; left: 132px; width: 2px; height: 100%;   /* = .r2r-head width */
+  position: absolute; top: 0; left: var(--r2r-head); width: 2px; height: 100%;  /* = .r2r-head width */
   background: #ff3b3b; pointer-events: none; z-index: 4;
 }
 

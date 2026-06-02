@@ -5,6 +5,8 @@
 # We deliberately do NOT pin gradio/Pillow/numpy here — Reel2Reel runs inside the
 # host's environment and must use the host's versions (verified against gradio
 # 5.29). These extras are additive:
-imageio-ffmpeg        # fallback ffmpeg binary if the system one is missing
-opentimelineio>=0.15  # .otio interchange (Resolve / Premiere / FCPXML); core/otio.py
-                      # also has a pure-dict fallback that works without it.
+imageio-ffmpeg        # fallback ffmpeg binary consumed by render.ffmpeg_path when the
+                      # system ffmpeg is missing — used, keep it.
+opentimelineio>=0.15  # OPTIONAL .otio interchange (Resolve / Premiere / FCPXML). core/otio.py
+                      # has a pure-dict path that works without it; the library is only used
+                      # for the file round-trip when present.

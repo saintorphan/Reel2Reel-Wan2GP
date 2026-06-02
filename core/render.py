@@ -24,7 +24,6 @@ from . import effects, paths
 
 logger = logging.getLogger("reel2reel.render")
 
-_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 _FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -140,7 +139,8 @@ def canvas_of(tl, width=None, height=None, fps=None) -> dict:
 
 
 def _is_image(src: str) -> bool:
-    return Path(src).suffix.lower() in _IMAGE_EXTS
+    from . import discovery        # lazy: discovery imports render (avoid the cycle)
+    return Path(src).suffix.lower() in discovery.IMAGE_EXTS
 
 
 def _clip_key(clip, canvas, stream, pad) -> str:
@@ -162,9 +162,13 @@ def normalize_video(clip, canvas, ffmpeg, pad=True) -> str:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     src_len = max(1.0 / canvas["fps"], clip.src_len)
     vf = []
-    sp = effects.speed_vf(clip.speed_f, clip.reverse)
-    if sp:
-        vf.append(sp)
+    # For an image the input is `-loop 1 -t {clip.dur}`, which already bakes in speed
+    # via clip.dur; re-applying setpts (and reverse buffering a looped still) would
+    # desync the timeline — so only speed/reverse a real video source.
+    if not _is_image(clip.src):
+        sp = effects.speed_vf(clip.speed_f, clip.reverse)
+        if sp:
+            vf.append(sp)
     crop = effects.crop_vf(clip.geometry)
     if crop:
         vf.append(crop)
@@ -197,20 +201,47 @@ def normalize_video(clip, canvas, ffmpeg, pad=True) -> str:
     return str(out_path)
 
 
+def _has_audio_stream(src) -> bool:
+    """True if ``src`` has at least one audio stream. Unknown (no ffprobe) → True so
+    we still attempt extraction (normalize_audio's fallback then covers a real miss)."""
+    exe = ffprobe_path()
+    if not exe:
+        return True
+    try:
+        out = run([exe, "-v", "error", "-select_streams", "a", "-show_entries",
+                   "stream=index", "-of", "csv=p=0", str(src)], timeout=30)
+        return bool(out.strip())
+    except Exception:
+        return True
+
+
 def normalize_audio(clip, canvas, ffmpeg) -> str:
     out_path = paths.norm_dir() / f"{_clip_key(clip, canvas, 'a', False)}.m4a"
     if out_path.exists():
         return str(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    src_len = max(0.01, clip.src_len)
+    sil = [ffmpeg, "-y", "-f", "lavfi", "-i",
+           f"anullsrc=channel_layout=stereo:sample_rate={canvas['ar']}",
+           "-t", f"{src_len:.3f}", "-c:a", "aac", "-ar", str(canvas["ar"]),
+           "-ac", "2", str(out_path)]
+    if not _has_audio_stream(clip.src):
+        # No audio stream (e.g. a silent video clip on a track) — synthesize silence
+        # directly, so we never log a failed extraction or abort the render.
+        run(sil)
+        return str(out_path)
     af = []
     sp = effects.speed_af(clip.speed_f, clip.reverse)
     if sp:
         af.append(sp)
     af += [f"aresample={canvas['ar']}", "aformat=sample_fmts=fltp:channel_layouts=stereo"]
-    args = [ffmpeg, "-y", "-ss", f"{clip.in_:.3f}", "-t", f"{max(0.01, clip.src_len):.3f}",
+    args = [ffmpeg, "-y", "-ss", f"{clip.in_:.3f}", "-t", f"{src_len:.3f}",
             "-i", clip.src, "-vn", "-af", ",".join(af), "-c:a", "aac",
             "-ar", str(canvas["ar"]), "-ac", "2", str(out_path)]
-    run(args)
+    try:
+        run(args)
+    except RenderError:
+        run(sil)                                   # belt-and-suspenders
     return str(out_path)
 
 
@@ -275,6 +306,10 @@ def export(tl, out_path=None, preset="mp4", quality="high", width=None, height=N
                 pip.append((t, c))
             else:
                 fold.append((t, c))
+    # Include every non-muted clip with a source and let normalize_audio synthesize
+    # silence when a source has no audio stream. We deliberately do NOT gate on
+    # has_audio: under the Wan2GP host get_video_info reports has_audio=False for
+    # everything, so gating would silently drop ALL audio on the export.
     audio_src = []
     for t in tl.audible_tracks("Audio"):
         for c in sorted(t.clips, key=lambda c: c.start):
@@ -282,7 +317,7 @@ def export(tl, out_path=None, preset="mp4", quality="high", width=None, height=N
                 audio_src.append((c, t))
     for t in tl.audible_tracks("Video"):
         for c in sorted(t.clips, key=lambda c: c.start):
-            if c.src and c.type == "media" and c.has_audio and not c.mute:
+            if c.src and c.type == "media" and not c.mute:
                 audio_src.append((c, t))
 
     # -- PASS 1 normalize ---------------------------------------------------
@@ -346,14 +381,31 @@ def export(tl, out_path=None, preset="mp4", quality="high", width=None, height=N
                 acc_end = c.end
             else:
                 tr = trans_by_left.get(prev.id) if prev else None
-                if tr and tr.between[1] == c.id:
+                gap = c.start - acc_end
+                # xfade only when the clips actually abut; a gap (which from_edit_json/
+                # from_otio can introduce) would make xfade's offset drift acc_end for
+                # every later clip — fall back to the gap+concat path for that pair.
+                if tr and tr.between[1] == c.id and gap <= 0.001:
                     off = max(0.0, acc_end - tr.duration)
                     name = effects.xfade_transition(tr.kind, tr.direction)
-                    filt.append(f"[{acc}][{cl}]xfade=transition={name}:"
-                                f"duration={tr.duration:.3f}:offset={off:.3f}[acc{i}]")
+                    # Run xfade in OPAQUE space: flatten both inputs' alpha (opacity/
+                    # fades) against opaque black first, so xfade doesn't cross-fade the
+                    # alpha channel and mis-blend transition edges. Re-introduce alpha on
+                    # the result so the accumulator keeps the transparent-canvas contract
+                    # (concat with transparent gaps, final overlay with eof_action=pass).
+                    filt.append(f"color=c=black:s={W}x{H}:r={FPS},format=yuva420p,"
+                                f"colorchannelmixer=aa=1,setsar=1[xb{i}]")
+                    filt.append(f"[xb{i}][{acc}]overlay=eof_action=pass:format=auto,"
+                                f"format=yuv420p[xa{i}]")
+                    filt.append(f"color=c=black:s={W}x{H}:r={FPS},format=yuva420p,"
+                                f"colorchannelmixer=aa=1,setsar=1[xb2{i}]")
+                    filt.append(f"[xb2{i}][{cl}]overlay=eof_action=pass:format=auto,"
+                                f"format=yuv420p[xc{i}]")
+                    filt.append(f"[xa{i}][xc{i}]xfade=transition={name}:"
+                                f"duration={tr.duration:.3f}:offset={off:.3f},"
+                                f"format=yuva420p,setsar=1[acc{i}]")
                     acc = f"acc{i}"; acc_end = acc_end - tr.duration + c.dur
                 else:
-                    gap = c.start - acc_end
                     if gap > 0.001:
                         transparent(gap, f"gap{i}")
                         filt.append(f"[{acc}][gap{i}][{cl}]concat=n=3:v=1:a=0[acc{i}]")
@@ -413,18 +465,19 @@ def export(tl, out_path=None, preset="mp4", quality="high", width=None, height=N
 
     # AUDIO — gain/fade/overlap-fade, delay to position, mix + loudnorm.
     # Kept in its own list so the (audio-less) GIF path can use video only.
-    _augment_overlap_fades(audio_src)
+    fade_plan = _augment_overlap_fades(audio_src)
     afilt = []
     a_labels = []
     for c, t in audio_src:
         i = idx
         inputs += ["-i", norm_a[c.id]]
         idx += 1
+        fin, fout = fade_plan.get(c.id, (c.fade_in, c.fade_out))
         ch = [f"[{i}:a]aresample={AR}", "asetpts=PTS-STARTPTS"]
-        if c.fade_in > 0.001:
-            ch.append(f"afade=t=in:st=0:d={c.fade_in:.3f}")
-        if c.fade_out > 0.001:
-            ch.append(f"afade=t=out:st={max(0, c.dur - c.fade_out):.3f}:d={c.fade_out:.3f}")
+        if fin > 0.001:
+            ch.append(f"afade=t=in:st=0:d={fin:.3f}")
+        if fout > 0.001:
+            ch.append(f"afade=t=out:st={max(0, c.dur - fout):.3f}:d={fout:.3f}")
         gain = float(c.gain_db) + float(getattr(t, "volume_db", 0.0))
         if abs(gain) > 1e-6:
             ch.append(f"volume={_gain(gain):.4f}")
@@ -445,8 +498,11 @@ def export(tl, out_path=None, preset="mp4", quality="high", width=None, height=N
         out_path = str(Path(out_path).with_suffix(p["ext"]))
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
 
-    # range trim on output (re-renders from 0 then seeks; correct + simple)
-    r0 = max(0.0, float(start)) if start else 0.0
+    # Range trim on output: build the full-length graph, then output-seek (-ss r0 after
+    # the graph). This is the intentional 'correct + simple' approach — re-rendering the
+    # whole graph keeps positions/transitions exact, the trim is just a cheap output seek.
+    # `is not None` so an explicit 0.0 start is honored (not treated as 'unset').
+    r0 = max(0.0, float(start)) if start is not None else 0.0
     r1 = float(end) if end else total
     rdur = max(1.0 / FPS, r1 - r0)
 
@@ -473,8 +529,12 @@ def export(tl, out_path=None, preset="mp4", quality="high", width=None, height=N
 
 
 def _augment_overlap_fades(audio_src):
-    """Auto-add symmetric fades over same-track audio overlaps (avoids the sum
-    level-jump / clicks; an equal-gain approximation of acrossfade)."""
+    """Compute symmetric fades over same-track audio overlaps (avoids the sum
+    level-jump / clicks; an equal-gain approximation of acrossfade). Returns a plan
+    {clip_id: (fade_in, fade_out)} seeded from each clip's existing fades and max()'d
+    with the computed overlap fade — it NEVER mutates the Clip objects (that would
+    autosave as user-authored automation)."""
+    plan = {c.id: (c.fade_in, c.fade_out) for c, _ in audio_src}
     by_track = {}
     for c, t in audio_src:
         by_track.setdefault(t.id, []).append(c)
@@ -484,8 +544,11 @@ def _augment_overlap_fades(audio_src):
             ov = a.end - b.start
             if ov > 0.02:
                 d = min(ov, a.dur * 0.5, b.dur * 0.5)
-                a.fade_out = max(a.fade_out, d)
-                b.fade_in = max(b.fade_in, d)
+                ain, aout = plan[a.id]
+                bin_, bout = plan[b.id]
+                plan[a.id] = (ain, max(aout, d))
+                plan[b.id] = (max(bin_, d), bout)
+    return plan
 
 
 def _encode_gif(ffmpeg, inputs, filt, out_path, r0, rdur, fps, W, cancel=None):
