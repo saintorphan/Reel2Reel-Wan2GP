@@ -16,13 +16,12 @@ button.reel2reel-tabbtn {{ border-bottom: 2px solid {_ACCENT} !important; }}
 #reel2reel-root .reel2reel-prim {{ background: {_ACCENT}; border-color: {_ACCENT_DK}; }}
 #reel2reel-root .reel2reel-gallery {{ min-height: 300px; }}
 
-/* Logo banner, top-right; absolutely positioned so the left column rises to the
-   same top line, with right padding on the sub-tab nav so it never slides under
-   the logo. */
+/* Small logo, tucked top-LEFT. Absolutely positioned; the sub-tab nav gets left
+   padding so its buttons never slide under the logo. */
 #reel2reel-banner {{
-    position: absolute; top: 0; right: 8px; z-index: 5; pointer-events: none;
+    position: absolute; top: 2px; left: 6px; z-index: 6; pointer-events: none;
 }}
-#reel2reel-banner img {{ height: 64px; width: auto; display: block; }}
-#reel2reel-banner h2 {{ margin: 0; color: {_ACCENT}; font-style: italic; }}
-#reel2reel-root .tab-nav {{ padding-right: 280px; }}
+#reel2reel-banner img {{ height: 34px; width: auto; display: block; }}
+#reel2reel-banner h2 {{ margin: 0; color: {_ACCENT}; font-style: italic; font-size: 20px; }}
+#reel2reel-root .tab-nav {{ padding-left: 140px; }}
 """

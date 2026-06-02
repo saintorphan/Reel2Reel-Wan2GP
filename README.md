@@ -6,16 +6,32 @@ A **multi-track timeline video editor** inside Wan2GP. Generate clips with the
 Video Generator (or anywhere else), **send them to Reel2Reel**, arrange them on
 video/audio tracks, trim and split, then **export a final cut** with ffmpeg.
 
-> ⚠️ **Early scaffold (v0.1.0) — NOT READY YET.** The timeline, library, project
-> save/load and the basic export path work; cross-dissolves and the in-browser
-> compositing preview are deferred milestones (see **Status**). Expect rough edges.
+> ⚠️ **Early build (v0.2.0) — improving fast.** Full editor tooling is in:
+> multi-track video/audio, **detach audio from video**, gain/fades/opacity,
+> mute/solo, cross-dissolves, undo/redo, playback transport and ffmpeg export all
+> work. The in-browser preview is still a single approximate `<video>` (export
+> for the real composite). Expect rough edges.
 
 | Sub-tab | What it does |
 |---------|--------------|
-| **📚 Library** | Browse the Wan2GP outputs folder (newest first) and add clips to the timeline. |
-| **🎞 Timeline** | A real multi-track canvas: drag to move, drag an edge to trim, click the ruler to scrub, split at the playhead, add tracks. Save / open projects. |
+| **📚 Library** | Browse the Wan2GP outputs folder (newest first) and add clips to a video or audio track. |
+| **🎞 Timeline** | A real multi-track canvas: drag to move, drag an edge to trim, ruler scrub, **Space** to play, **S** split, snap + zoom-to-fit. Per-clip inspector (gain, fade in/out, opacity, mute), **detach audio**, duplicate, ripple/lift delete, **cross-dissolve** transitions, per-track volume/mute/solo/lock + reorder, **undo/redo**. Save / open projects. |
 | **🎬 Render** | Composite the timeline to an mp4 with ffmpeg, preview it, and send the final cut to **Img2Vid** or **Save As**. |
 | **⚙ Settings** | Repoint the projects / renders / import-from dirs; check ffmpeg. |
+
+### Editor tooling
+
+- **Audio** — every clip has a gain (dB) and fade in/out; tracks have volume, and
+  **mute / solo / lock**. **Detach audio** splits a video clip's sound onto its own
+  audio track (muting the video's embedded audio) so you can move, trim, fade and
+  gain it independently. Audio clips show a waveform.
+- **Video** — multi-track overlay (upper tracks composite over lower), per-clip
+  **opacity** and alpha **fades**, and **cross-dissolve** transitions between
+  adjacent clips (ripples the next clip into an overlap).
+- **Editing** — drag-move (lane-locked), edge-trim, razor **split** at the
+  playhead, **ripple delete** (closes the gap) vs **delete/lift** (leaves it),
+  **duplicate**, grid + edge **snapping**, **zoom-to-fit**, a playback
+  **transport** (Space), and **undo / redo** (⌘/Ctrl-Z, ⌘/Ctrl-Shift-Z).
 
 ## How clips get here
 
@@ -83,20 +99,28 @@ Drop banner artwork at `assets/reel2reel_logo.png` (base64-embedded top-right).
 
 ## Status
 
-Early build (v0.1.0). **Working:**
+v0.2.0. **Working:**
 
 - Loads as a Wan2GP tab; multi-track DOM timeline with drag-move, edge-trim,
-  ruler scrubbing, zoom, split-at-playhead, add/remove tracks.
+  ruler scrubbing, zoom + zoom-to-fit, snapping, split, add/remove/reorder tracks,
+  playback transport and keyboard shortcuts.
+- **Audio editing** — per-clip gain + fade in/out, per-track volume, mute/solo/lock,
+  and **detach audio from video** (separate audio onto its own track). Waveforms.
+- **Video** — multi-track overlay compositing, per-clip opacity + alpha fades, and
+  **cross-dissolve** transitions (xfade video + ripple).
+- **Undo / redo** across both browser edits and panel operations.
 - Library import from the outputs folder; the `inbox` send-to mechanism.
 - Project save / open (`Reel2ReelProject.1` JSON).
-- Export to mp4: single/multi video track (hard cuts + black gaps via
-  overlay-onto-canvas) and audio tracks (`adelay` placement, `amix`, `loudnorm`).
+- Export to mp4 via the two-stage ffmpeg pipeline (normalize → per-track
+  concat/xfade overlay-onto-canvas → `adelay`/`amix`/`loudnorm`), verified end-to-end
+  for transitions, fades, multi-track overlay and multi-track audio.
 - "Send final cut to Img2Vid" (host-permitting) and Save As.
 
-**Deferred:** cross-dissolve transitions (xfade/acrossfade branch is architected
-but gated); frame-accurate / multi-clip compositing **preview** in the browser
+**Deferred:** frame-accurate / multi-clip compositing **preview** in the browser
 (the live preview is a single approximate `<video>` — export for the real cut);
-ripple/roll edits; canonical `.otio` file round-trip; per-clip audio waveforms.
+ripple/roll/slip/slide trims and JKL transport; equal-power audio cross-fades
+(`acrossfade`); keyframeable effects and speed ramps; canonical `.otio` file
+round-trip; hardware encoders / two-pass loudnorm.
 
 This is **not** an official plugin — distribute via the Plugin Manager's
 add-from-URL flow; don't add it to the bundled `plugins.json`.

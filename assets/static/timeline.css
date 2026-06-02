@@ -44,11 +44,14 @@
 .r2r-tl .r2r-lanes { position: relative; }
 .r2r-tl .r2r-track { display: flex; align-items: stretch; height: 52px; }
 .r2r-tl .r2r-head {
-  width: 96px; min-width: 96px; display: flex; align-items: center;
+  width: 96px; min-width: 96px; display: flex; flex-direction: column;
+  justify-content: center; gap: 1px;
   padding: 0 8px; color: #c9c6bf; background: #1a1c22;
   border-right: 1px solid var(--r2r-edge); border-bottom: 1px solid var(--r2r-edge);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  overflow: hidden; white-space: nowrap;
 }
+.r2r-tl .r2r-head span { overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.r2r-tl .r2r-head small { color: #7f8490; font-size: 9px; }
 .r2r-tl .r2r-lane {
   position: relative; flex: 1; height: 52px;
   background: var(--r2r-lane); border-bottom: 1px solid var(--r2r-edge);
@@ -86,3 +89,28 @@
   position: absolute; top: 0; left: 96px; width: 2px; height: 100%;
   background: #ff3b3b; pointer-events: none; z-index: 4;
 }
+
+/* fades, opacity, transitions, mute */
+.r2r-tl .r2r-fade {
+  position: absolute; top: 0; height: 100%; pointer-events: none; z-index: 2;
+}
+.r2r-tl .r2r-fade.l { left: 0;  background: linear-gradient(to right, rgba(0,0,0,0.75), rgba(0,0,0,0)); }
+.r2r-tl .r2r-fade.r { right: 0; background: linear-gradient(to left,  rgba(0,0,0,0.75), rgba(0,0,0,0)); }
+.r2r-tl .r2r-clip.muted { opacity: 0.55; filter: grayscale(0.4); }
+.r2r-tl .r2r-trans {
+  position: absolute; top: 5px; height: 42px; z-index: 5; pointer-events: none;
+  background: repeating-linear-gradient(45deg, rgba(255,255,255,0.55) 0 4px, rgba(255,255,255,0.15) 4px 8px);
+  border-left: 1px solid #fff; border-right: 1px solid #fff; border-radius: 3px;
+}
+
+/* transport + tool rows */
+.r2r-tl .r2r-transport { display: flex; gap: 10px; align-items: center; }
+.r2r-tl .r2r-transport button, .r2r-tl .r2r-fit {
+  background: var(--r2r-amber); color: #1a1405; border: 1px solid var(--r2r-amber-dk);
+  border-radius: 5px; padding: 3px 10px; cursor: pointer; font-weight: 600; font-size: 11px;
+}
+.r2r-tl .r2r-readout { color: #c9c6bf; font-variant-numeric: tabular-nums; }
+.r2r-tl .r2r-tools-row { display: flex; gap: 12px; align-items: center; }
+.r2r-tl .r2r-snaplbl { display: flex; gap: 5px; align-items: center; }
+.r2r-tl .r2r-snap { accent-color: var(--r2r-amber); }
+.r2r-tl .r2r-hint { color: #6f747f; font-size: 10px; max-width: 320px; }

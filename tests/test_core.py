@@ -39,6 +39,7 @@ def test_timeline_roundtrip():
         assert p.is_file()
         tl2 = timeline.load(p)
         assert tl2.name == "Cut 1"
+        assert len(tl2.tracks) == len(tl.tracks) == 2, ("no duplicate tracks", len(tl2.tracks))
         assert sum(len(t.clips) for t in tl2.tracks) == 3
         assert abs(tl2.total_duration() - 7.0) < 1e-6
         _, c1 = tl2.find_clip("c1")
@@ -67,6 +68,7 @@ def test_edit_json_roundtrip():
     edit = tl.to_edit_json()
     assert len(edit["clips"]) == 3 and len(edit["tracks"]) == 2
     tl2 = timeline.Timeline.from_edit_json(edit)
+    assert len(tl2.tracks) == 2, ("no duplicate tracks", len(tl2.tracks))
     assert sum(len(t.clips) for t in tl2.tracks) == 3
     assert abs(tl2.total_duration() - tl.total_duration()) < 1e-6
     print("✓ flat edit-json round-trip")
@@ -82,6 +84,90 @@ def test_otio_convert():
     _, c2 = tl2.find_clip("c2")
     assert c2 and abs(c2.start - 3.0) < 1e-6, c2.start if c2 else None
     print("✓ OTIO convert preserves clips + positions")
+
+
+def test_detach_audio():
+    tl = _tl()
+    nv = sum(len(t.clips) for t in tl.tracks)
+    aid = tl.detach_audio("c1")
+    assert aid, "detach returned no id"
+    _, vid = tl.find_clip("c1")
+    _, aud = tl.find_clip(aid)
+    assert vid.mute is True, "source video audio should be muted after detach"
+    assert aud.track != vid.track and aud.src == vid.src
+    assert abs(aud.start - vid.start) < 1e-6 and abs(aud.dur - vid.dur) < 1e-6
+    assert sum(len(t.clips) for t in tl.tracks) == nv + 1
+    print("✓ detach audio (separate audio from video)")
+
+
+def test_clip_track_ops():
+    tl = _tl()
+    # set_clip clamps fades to clip duration and opacity to [0,1]
+    tl.set_clip("c1", fade_in=99, fade_out=99, opacity=2.0, gain_db=-6)
+    _, c1 = tl.find_clip("c1")
+    assert c1.fade_in <= c1.dur and c1.fade_out <= c1.dur and c1.opacity == 1.0
+    assert c1.gain_db == -6
+    # duplicate appends a copy with a fresh id at the track end
+    n = len(tl.first_track("Video").clips)
+    dup = tl.duplicate_clip("c1")
+    assert dup and dup != "c1" and len(tl.first_track("Video").clips) == n + 1
+    # ripple delete closes the gap
+    v = tl.first_track("Video")
+    tl2 = _tl()
+    before = tl2.total_duration()
+    tl2.ripple_delete("c1")          # c1 was 0..3, c2 0..(shifted)
+    _, c2 = tl2.find_clip("c2")
+    assert abs(c2.start - 0.0) < 1e-6, c2.start
+    assert tl2.total_duration() < before
+    # track ops
+    a2 = tl.add_track("Audio", "Music2")
+    assert tl.set_track(a2.id, volume_db=-3, solo=True)
+    assert tl.audible_tracks("Audio") == [a2]   # solo wins
+    assert tl.move_track(a2.id, -1)
+    assert tl.remove_track(a2.id)
+    print("✓ set_clip/track, duplicate, ripple-delete, track add/move/remove/solo")
+
+
+def test_transitions():
+    tl = _tl()                       # c1 0..3, c2 at 3..7 on V1
+    v = tl.first_track("Video")
+    tid = tl.add_transition("c1", 0.5)
+    assert tid and len(tl.transitions) == 1
+    _, c2 = tl.find_clip("c2")
+    _, c1 = tl.find_clip("c1")
+    assert abs(c2.start - (c1.end - 0.5)) < 1e-6, (c1.end, c2.start)   # overlap by D
+    assert tl.remove_transition("c1") and not tl.transitions
+    _, c2b = tl.find_clip("c2")
+    assert abs(c2b.start - 3.0) < 1e-6, c2b.start                      # un-rippled
+    print("✓ add/remove cross-dissolve transition (ripple)")
+
+
+def test_render_transition():
+    if not render.ffmpeg_path():
+        print("· transition render skipped (ffmpeg not found)")
+        return
+    with tempfile.TemporaryDirectory() as d:
+        os.environ["REEL2REEL_DIR"] = d
+        srcs = []
+        for i, color in enumerate(("red", "blue")):
+            sp = Path(d) / f"c{i}.mp4"
+            render.run([render.ffmpeg_path(), "-y", "-f", "lavfi", "-i",
+                        f"color=c={color}:s=160x120:r=24:d=1.5",
+                        "-f", "lavfi", "-i", f"sine=frequency={440 + i*220}:duration=1.5",
+                        "-shortest", "-pix_fmt", "yuv420p", "-c:a", "aac", str(sp)])
+            srcs.append(str(sp))
+        tl = timeline.Timeline(fps=24, width=160, height=120)
+        v = tl.first_track("Video")
+        tl.add_clip(timeline.Clip(id="c1", src=srcs[0], start=0, in_=0, out=1.5,
+                                  track=v.id, has_audio=True, fade_in=0.2))
+        tl.add_clip(timeline.Clip(id="c2", src=srcs[1], start=1.5, in_=0, out=1.5,
+                                  track=v.id, has_audio=True, fade_out=0.2))
+        tl.add_transition("c1", 0.5)            # overlap -> total 1.5+1.5-0.5 = 2.5
+        out = render.export(tl, str(Path(d) / "out.mp4"))
+        dur = render.ffprobe_dur(out)
+        assert Path(out).stat().st_size > 0
+        assert dur is None or abs(dur - 2.5) < 0.5, dur
+    print("✓ ffmpeg render with cross-dissolve + fades + audio-from-video")
 
 
 def test_render_smoke():
@@ -117,5 +203,9 @@ if __name__ == "__main__":
     test_split_at()
     test_edit_json_roundtrip()
     test_otio_convert()
+    test_detach_audio()
+    test_clip_track_ops()
+    test_transitions()
+    test_render_transition()
     test_render_smoke()
     print("\nALL PASSED")

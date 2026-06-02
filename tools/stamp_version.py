@@ -16,7 +16,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-VERSION = "v0.1.0"
+VERSION = "v0.2.0"
 # Amber sampled from the "REEL2REEL" wordmark.
 COLOR = (224, 161, 6, 255)
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
