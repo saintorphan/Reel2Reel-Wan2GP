@@ -40,6 +40,20 @@ PLUGIN_ID = "Reel2Reel"
 PLUGIN_NAME = "Reel2Reel"
 _UNDO_CAP = 60
 
+# Pure-view JS (no Gradio round-trip): hide the Render "Start/End" number row when
+# "Export range only" is unchecked. Re-syncs on body mutations (tab renders) + once
+# at boot. Must go through add_custom_js — gr.HTML <script> won't execute.
+_RANGE_ROW_JS = (
+    "(function(){function sync(){var ctl=document.getElementById('r2r-render-controls');"
+    "if(!ctl)return;var cb=ctl.querySelector('input[type=checkbox]');"
+    "var row=ctl.querySelector('.r2r-range-row');if(!row)return;"
+    "row.classList.toggle('r2r-range-off',!(cb&&cb.checked));}"
+    "document.addEventListener('change',function(e){if(e.target&&e.target.matches&&"
+    "e.target.matches('#r2r-render-controls input[type=checkbox]'))sync();},true);"
+    "try{new MutationObserver(sync).observe(document.body,{childList:true,subtree:true});}"
+    "catch(e){}sync();})();"
+)
+
 # Shared saintorphan right-click menu. The scaffold block (window.SaintorphanMenu)
 # is COPIED VERBATIM from Replicant's _CTX_MENU_JS so whichever of the user's
 # plugins loads first builds the identical menu; our section is guarded by
@@ -161,8 +175,9 @@ class Reel2Reel(WAN2GPPlugin):
         except Exception:
             traceback.print_exc()
         js = tw.timeline_js()
-        if js:
-            self.add_custom_js(js)
+        combined = "\n".join(p for p in (js, _RANGE_ROW_JS) if p)
+        if combined:
+            self.add_custom_js(combined)
         try:
             tw.register_static_paths([
                 paths.renders_dir(), paths.thumbs_dir(), paths.norm_dir(),
@@ -213,11 +228,14 @@ class Reel2Reel(WAN2GPPlugin):
 
         tl = ui["pages"]["timeline"]
         lib = ui["pages"]["library"]
+        bar = ui["bar"]                       # persistent project/version bar
         self.tl_to_py = tl["tl_to_py"]
         self.tl_from_py = tl["tl_from_py"]
         self.trk_dd = tl["trk_dd"]
-        self.proj_dd = tl["proj_dd"]
-        self.ver_dd = tl["ver_dd"]
+        # proj_dd / ver_dd now live in the suite-level bar; keep the same attr names
+        # so on_tab_outputs / on_tab_select keep feeding the live components.
+        self.proj_dd = bar["proj_dd"]
+        self.ver_dd = bar["ver_dd"]
         self.bin_gallery = lib["bin_gallery"]
         self.global_gallery = lib["global_gallery"]
         self._last_sig = self._content_sig()
@@ -333,6 +351,11 @@ class Reel2Reel(WAN2GPPlugin):
             dest = str(paths.thumbs_dir() / f"wave_{clip.id}.png")
             return render.waveform(clip.src, clip.in_, clip.out, dest) \
                 or discovery.audio_placeholder()
+        if kind == "video":
+            dest = str(paths.thumbs_dir() / f"strip_{clip.id}.png")
+            fs = render.filmstrip(clip.src, clip.in_, clip.out, dest)
+            if fs:
+                return fs
         return discovery.thumbnail(clip.src, clip.id, getattr(self, "get_video_frame", None))
 
     def _ingest_clip(self, path: str, force_kind: str = "auto"):
@@ -369,6 +392,7 @@ class Reel2Reel(WAN2GPPlugin):
                               js=tw.APPLY_OP_JS, show_progress="hidden")
         self._wire_library(pages["library"], ui["subtabs"])
         self._wire_timeline(pages["timeline"])
+        self._wire_projects(ui["bar"])
         self._wire_render(pages["render"])
         self._wire_settings(ui["settings"], pages)
         self._wire_ctx(pages["library"])
@@ -580,27 +604,25 @@ class Reel2Reel(WAN2GPPlugin):
 
     # -- library ------------------------------------------------------------
     def _wire_library(self, c, subtabs):
+        # All three source galleries feed ONE shared picker; the single action bar
+        # then operates on whatever is selected, regardless of the active source tab.
         c["refresh"].click(self._refresh_library, outputs=[c["gallery"], c["status"]])
         c["gallery"].select(self._on_pick, outputs=[c["picked"]])
+        c["bin_gallery"].select(self._bin_pick, outputs=[c["picked"]])
+        c["global_gallery"].select(self._gbin_pick, outputs=[c["picked"]])
+        c["picked"].change(
+            lambda p: f"**{Path(p).name}**" if p else "*No clip selected*",
+            inputs=[c["picked"]], outputs=[c["lib_selected"]])
         c["add"].click(self._add_to_timeline, inputs=[c["picked"], c["kind"]],
                       outputs=[self.tl_from_py, subtabs, self.trk_dd, c["status"]])
         c["add_gbin"].click(self._add_to_global, inputs=[c["picked"]],
                            outputs=[c["global_gallery"], c["status"]])
         c["add_pbin"].click(self._add_to_project_bin, inputs=[c["picked"]],
                            outputs=[c["bin_gallery"], c["status"]])
-        # project bin
-        c["bin_gallery"].select(self._bin_pick, outputs=[c["bin_picked"]])
-        c["bin_add_tl"].click(self._bin_add_tl, inputs=[c["bin_picked"], c["bin_kind"]],
-                             outputs=[self.tl_from_py, self.trk_dd, c["status"]])
-        c["bin_remove"].click(self._bin_remove, inputs=[c["bin_picked"]],
-                             outputs=[c["bin_gallery"], c["bin_picked"], c["status"]])
-        # global bin
-        c["global_gallery"].select(self._gbin_pick, outputs=[c["global_picked"]])
-        c["global_add_tl"].click(self._gbin_add_tl,
-                                inputs=[c["global_picked"], c["global_kind"]],
-                                outputs=[self.tl_from_py, self.trk_dd, c["status"]])
-        c["global_remove"].click(self._gbin_remove, inputs=[c["global_picked"]],
-                                outputs=[c["global_gallery"], c["global_picked"], c["status"]])
+        c["bin_remove"].click(self._bin_remove, inputs=[c["picked"]],
+                             outputs=[c["bin_gallery"], c["picked"], c["status"]])
+        c["global_remove"].click(self._gbin_remove, inputs=[c["picked"]],
+                                outputs=[c["global_gallery"], c["picked"], c["status"]])
 
     # -- media bins ---------------------------------------------------------
     def _add_to_global(self, picked):
@@ -629,22 +651,6 @@ class Reel2Reel(WAN2GPPlugin):
             return self._gbin_view[evt.index]["path"]
         except Exception:
             return None
-
-    def _bin_add_tl(self, picked, kind):
-        if not picked:
-            raise gr.Error("Pick a clip in the project bin first.")
-        self._push_undo()
-        self._ingest_clip(picked, force_kind=kind if kind in ("Video", "Audio") else "auto")
-        return self._env_after(), gr.update(choices=self._track_choices()), \
-            f"Added **{Path(picked).stem}** to the timeline."
-
-    def _gbin_add_tl(self, picked, kind):
-        if not picked:
-            raise gr.Error("Pick a clip in the global library first.")
-        self._push_undo()
-        self._ingest_clip(picked, force_kind=kind if kind in ("Video", "Audio") else "auto")
-        return self._env_after(), gr.update(choices=self._track_choices()), \
-            f"Added **{Path(picked).stem}** to the timeline."
 
     def _bin_remove(self, picked):
         if not picked:
@@ -722,8 +728,10 @@ class Reel2Reel(WAN2GPPlugin):
                             outputs=[self.tl_from_py, self.trk_dd, c["status"]])
         c["add_audio"].click(lambda: self._add_track("Audio"),
                             outputs=[self.tl_from_py, self.trk_dd, c["status"]])
-        c["undo"].click(self._do_undo, outputs=[self.tl_from_py, self.trk_dd, c["status"]])
-        c["redo"].click(self._do_redo, outputs=[self.tl_from_py, self.trk_dd, c["status"]])
+        c["undo"].click(self._do_undo,
+                       outputs=[self.tl_from_py, self.trk_dd, c["undo"], c["redo"], c["status"]])
+        c["redo"].click(self._do_redo,
+                       outputs=[self.tl_from_py, self.trk_dd, c["undo"], c["redo"], c["status"]])
 
         # Track inspector
         c["trk_dd"].change(self._load_track, inputs=[c["trk_dd"]],
@@ -741,33 +749,37 @@ class Reel2Reel(WAN2GPPlugin):
         c["trk_down"].click(lambda t: self._move_track(t, 1), inputs=[c["trk_dd"]],
                            outputs=[self.tl_from_py, self.trk_dd, c["status"]])
 
-        # Projects: CRUD + versioning
-        proj_io = [self.tl_from_py, c["proj_dd"], c["proj_name"], c["current_lbl"],
-                   self.trk_dd, c["ver_dd"], c["status"]]
-        c["open"].click(self._open_project, inputs=[c["proj_dd"]], outputs=proj_io)
-        c["new"].click(self._new_project, inputs=[c["proj_name"]], outputs=proj_io)
-        c["saveas"].click(self._saveas_project, inputs=[c["proj_name"]],
-                         outputs=[c["proj_dd"], c["proj_name"], c["current_lbl"],
-                                  c["ver_dd"], c["status"]])
-        c["save"].click(self._save_project, outputs=[c["current_lbl"], c["status"]])
-        c["rename"].click(self._rename_project, inputs=[c["proj_name"]],
-                         outputs=[c["proj_dd"], c["proj_name"], c["current_lbl"], c["status"]])
-        c["dup"].click(self._dup_project, inputs=[c["proj_name"]],
-                      outputs=[c["proj_dd"], c["status"]])
-        c["delete"].click(self._delete_project, inputs=[c["proj_dd"]],
-                         outputs=[c["proj_dd"], c["current_lbl"], c["status"]])
-        c["restore_auto"].click(self._restore_autosave,
-                               outputs=[self.tl_from_py, self.trk_dd, c["status"]])
-        c["otio_export"].click(self._export_otio, outputs=[c["otio_export"], c["status"]])
-        c["otio_import"].upload(self._import_otio, inputs=[c["otio_import"]],
-                               outputs=[self.tl_from_py, self.trk_dd, c["status"]])
+    def _wire_projects(self, bar):
+        """Project CRUD + versioning + OTIO — now on the persistent suite-level bar.
+        Handler bodies are unchanged; only the components they read/write moved here,
+        and every status message now lands on the always-visible bar_status."""
+        st = bar["bar_status"]
+        proj_io = [self.tl_from_py, bar["proj_dd"], bar["proj_name"], bar["current_lbl"],
+                   self.trk_dd, bar["ver_dd"], st]
+        bar["open"].click(self._open_project, inputs=[bar["proj_dd"]], outputs=proj_io)
+        bar["new"].click(self._new_project, inputs=[bar["proj_name"]], outputs=proj_io)
+        bar["saveas"].click(self._saveas_project, inputs=[bar["proj_name"]],
+                           outputs=[bar["proj_dd"], bar["proj_name"], bar["current_lbl"],
+                                    bar["ver_dd"], st])
+        bar["save"].click(self._save_project, outputs=[bar["current_lbl"], st])
+        bar["rename"].click(self._rename_project, inputs=[bar["proj_name"]],
+                           outputs=[bar["proj_dd"], bar["proj_name"], bar["current_lbl"], st])
+        bar["dup"].click(self._dup_project, inputs=[bar["proj_name"]],
+                        outputs=[bar["proj_dd"], st])
+        bar["delete"].click(self._delete_project, inputs=[bar["proj_dd"]],
+                           outputs=[bar["proj_dd"], bar["current_lbl"], st])
+        bar["restore_auto"].click(self._restore_autosave,
+                                 outputs=[self.tl_from_py, self.trk_dd, st])
+        bar["otio_export"].click(self._export_otio, outputs=[bar["otio_export"], st])
+        bar["otio_import"].upload(self._import_otio, inputs=[bar["otio_import"]],
+                                 outputs=[self.tl_from_py, self.trk_dd, st])
         # Versions (manual named snapshots)
-        c["snapshot"].click(self._snapshot, inputs=[c["ver_label"]],
-                           outputs=[c["ver_dd"], c["ver_label"], c["status"]])
-        c["restore"].click(self._restore_version, inputs=[c["ver_dd"]],
-                          outputs=[self.tl_from_py, self.trk_dd, c["status"]])
-        c["delver"].click(self._delete_version, inputs=[c["ver_dd"]],
-                         outputs=[c["ver_dd"], c["status"]])
+        bar["snapshot"].click(self._snapshot, inputs=[bar["ver_label"]],
+                             outputs=[bar["ver_dd"], bar["ver_label"], st])
+        bar["restore"].click(self._restore_version, inputs=[bar["ver_dd"]],
+                            outputs=[self.tl_from_py, self.trk_dd, st])
+        bar["delver"].click(self._delete_version, inputs=[bar["ver_dd"]],
+                           outputs=[bar["ver_dd"], st])
 
     def _on_timeline_change(self, payload: str):
         if not payload:
@@ -1010,19 +1022,29 @@ class Reel2Reel(WAN2GPPlugin):
         return (self._env_after(), gr.update(choices=self._track_choices(), value=track_id),
                 "Reordered tracks.")
 
+    def _undo_labels(self):
+        """Button labels that surface how deep the undo / redo stacks are."""
+        u = f"↶ Undo ({len(self._undo)})" if self._undo else "↶ Undo"
+        r = f"↷ Redo ({len(self._redo)})" if self._redo else "↷ Redo"
+        return gr.update(value=u), gr.update(value=r)
+
     def _do_undo(self):
         if not self._undo:
-            return self._load_envelope(), gr.update(choices=self._track_choices()), "Nothing to undo."
+            return (self._load_envelope(), gr.update(choices=self._track_choices()),
+                    *self._undo_labels(), "Nothing to undo.")
         self._redo.append(json.dumps(timeline.to_document(self._project)))
         self._project = timeline.from_document(json.loads(self._undo.pop()))
-        return self._env_after(), gr.update(choices=self._track_choices()), "Undid."
+        return (self._env_after(), gr.update(choices=self._track_choices()),
+                *self._undo_labels(), "Undid.")
 
     def _do_redo(self):
         if not self._redo:
-            return self._load_envelope(), gr.update(choices=self._track_choices()), "Nothing to redo."
+            return (self._load_envelope(), gr.update(choices=self._track_choices()),
+                    *self._undo_labels(), "Nothing to redo.")
         self._undo.append(json.dumps(timeline.to_document(self._project)))
         self._project = timeline.from_document(json.loads(self._redo.pop()))
-        return self._env_after(), gr.update(choices=self._track_choices()), "Redid."
+        return (self._env_after(), gr.update(choices=self._track_choices()),
+                *self._undo_labels(), "Redid.")
 
     # -- projects: CRUD + versioning ----------------------------------------
     def _proj_io(self, status):

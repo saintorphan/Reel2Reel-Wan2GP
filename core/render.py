@@ -525,6 +525,23 @@ def waveform(src, in_, out, dest, w=400, h=80) -> str | None:
         return None
 
 
+def filmstrip(src, in_, out, dest, n=6, fh=48) -> str | None:
+    """A horizontal strip of ~n evenly-sampled frames for a video clip's thumbnail."""
+    exe = ffmpeg_path()
+    if not exe or Path(dest).exists():
+        return dest if Path(dest).exists() else None
+    Path(dest).parent.mkdir(parents=True, exist_ok=True)
+    dur = max(0.1, float(out) - float(in_))
+    rate = max(0.5, n / dur)
+    try:
+        run([exe, "-y", "-ss", f"{float(in_):.3f}", "-t", f"{dur:.3f}", "-i", src,
+             "-frames:v", "1", "-vf",
+             f"fps={rate:.4f},scale=-1:{fh},tile={n}x1", dest], timeout=120)
+        return dest if Path(dest).exists() else None
+    except Exception:
+        return None
+
+
 def extract_frame(src, t, dest) -> str | None:
     exe = ffmpeg_path()
     if not exe:

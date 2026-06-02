@@ -112,6 +112,12 @@
       var nm = document.createElement("span"); nm.textContent = (t.name || t.id);
       var sm = document.createElement("small"); sm.textContent = t.kind + flags;
       head.appendChild(btn); head.appendChild(nm); head.appendChild(sm);
+      if (!collapsed) {
+        var rsz = document.createElement("div");
+        rsz.className = "r2r-trk-resize"; rsz.title = "drag to resize track";
+        wireTrackResize(rsz, t);
+        head.appendChild(rsz);
+      }
       var lane = document.createElement("div");
       lane.className = "r2r-lane"; lane.dataset.track = t.id; lane.style.height = h + "px";
       if (!collapsed) {
@@ -121,9 +127,18 @@
       }
       row.appendChild(head); row.appendChild(lane); S.lanes.appendChild(row);
     });
+    if (!clips().length) {
+      var hint = document.createElement("div");
+      hint.className = "r2r-empty";
+      hint.innerHTML = "Empty timeline — add clips from the <b>Library</b> tab, or "
+        + "right-click any output / clip → <b>Reel2Reel Library</b>, then add to a "
+        + "track. Double-click a clip to inspect it · press <b>?</b> for shortcuts.";
+      S.lanes.appendChild(hint);
+    }
     var w = Math.max(600, sec2px(totalDur()) + 200);
     S.ruler.style.width = w + "px";
-    drawRuler(); renderMarkers(); placePlayhead(); driveVideo(); updateReadout(); syncSeq();
+    drawRuler(); renderMarkers(); renderRange(); placePlayhead(); driveVideo();
+    updateReadout(); updateZoomVal(); syncSeq();
   }
   function renderMarkers() {
     if (!S.ruler) return;
@@ -134,6 +149,17 @@
       el.style.borderTopColor = m.color || "#e0a106";
       el.title = m.label || ("marker @ " + (m.t || 0).toFixed(2) + "s");
       S.ruler.appendChild(el);
+    });
+  }
+  function wireTrackResize(handle, track) {
+    handle.addEventListener("pointerdown", function (e) {
+      e.preventDefault(); e.stopPropagation();
+      var h0 = (track.height > 1 ? track.height : 52), y0 = e.clientY;
+      function mv(e2) { track.height = Math.max(28, Math.round(h0 + (e2.clientY - y0))); renderAll(); }
+      window.addEventListener("pointermove", mv);
+      window.addEventListener("pointerup", function () {
+        window.removeEventListener("pointermove", mv); commit();
+      }, { once: true });
     });
   }
   function laneAt(clientY) {
@@ -156,9 +182,18 @@
       + (c.type === "text" ? " r2r-text" : "");
     el.dataset.id = c.id;
     el.setAttribute("data-media-src", c.thumb_url || c.url || "");
+    el.setAttribute("role", "button");
+    el.setAttribute("tabindex", "0");
+    el.setAttribute("aria-label", (c.label || c.id) + " clip on " + (t.name || t.id));
     el.style.transform = "translateX(" + sec2px(c.start) + "px)";
     el.style.width = Math.max(8, sec2px(c.dur)) + "px";
-    if (c.thumb_url) el.style.backgroundImage = "url('" + c.thumb_url + "')";
+    if (c.thumb_url) {
+      el.style.backgroundImage = "url('" + c.thumb_url + "')";
+      if ((t.kind || "Video") === "Video" && c.type !== "text") {   // filmstrip tiles
+        el.style.backgroundSize = "auto 100%";
+        el.style.backgroundRepeat = "repeat-x";
+      }
+    }
     if (c.opacity != null && c.opacity < 0.999) el.style.outlineOffset = "-2px";
     var lbl = document.createElement("span"); lbl.className = "r2r-label";
     lbl.textContent = (c.label || c.id) + (c.mute ? " 🔇" : "")
@@ -233,7 +268,7 @@
     placePlayhead(); driveVideo(); updateReadout();
   }
   function play() {
-    if (S.playing) return; S.playing = true; S.lastT = 0;
+    if (S.playing) return; S.playing = true; S.lastT = 0; setPlayBtn("❚❚");
     var step = function (ts) {
       if (!S.playing) return;
       if (!S.lastT) S.lastT = ts;
@@ -244,7 +279,7 @@
     };
     S.rafId = requestAnimationFrame(step);
   }
-  function stop() { S.playing = false; if (S.rafId) cancelAnimationFrame(S.rafId); S.rafId = null; }
+  function stop() { S.playing = false; if (S.rafId) cancelAnimationFrame(S.rafId); S.rafId = null; setPlayBtn("►"); }
   function togglePlay() { S.playing ? (stop(), commit()) : play(); }
 
   // ---- interaction ----------------------------------------------------------
@@ -317,7 +352,7 @@
       e.preventDefault(); e.stopPropagation();
       S.edit.ui = S.edit.ui || {};
       S.edit.ui.selected = c.id; S.edit.ui.selection = [c.id];
-      highlight(); commit();
+      highlight(); commit(); openInspector();
     });
   }
   function clipById(id) {
@@ -431,7 +466,49 @@
     var b = document.querySelector("#" + id + " button") || document.querySelector("#" + id);
     if (b) b.click();
   }
-  function syncSnapBox() { var s = S.root && S.root.querySelector(".r2r-snap"); if (s) s.checked = S.snap; }
+  function setZoom(px) {
+    S.pxPerSec = Math.max(10, Math.min(400, px));
+    var z = S.root && S.root.querySelector(".r2r-zoom"); if (z) z.value = Math.round(S.pxPerSec);
+    updateZoomVal(); renderAll(); commit();
+  }
+  function updateZoomVal() {
+    var v = S.root && S.root.querySelector(".r2r-zoomval");
+    if (v) v.textContent = Math.round(S.pxPerSec) + " px/s";
+  }
+  function setPlayBtn(t) { var b = S.root && S.root.querySelector(".r2r-play"); if (b) b.textContent = t; }
+  function renderRange() {                    // in/out marks → amber band on the ruler
+    if (!S.ruler) return;
+    var ui = S.edit.ui || {};
+    if (ui["in"] == null || ui["out"] == null || ui["out"] <= ui["in"]) return;
+    var band = document.createElement("div");
+    band.className = "r2r-range";
+    band.style.left = sec2px(ui["in"]) + "px";
+    band.style.width = sec2px(ui["out"] - ui["in"]) + "px";
+    S.ruler.appendChild(band);
+  }
+  // ---- collapsible right-docked inspector (pure client-side, hosted on #r2r-stage) ----
+  function stageEl() { return document.getElementById("r2r-stage"); }
+  function openInspector() { var s = stageEl(); if (s) s.classList.remove("r2r-ins-collapsed"); }
+  function closeInspector() { var s = stageEl(); if (s) s.classList.add("r2r-ins-collapsed"); }
+  function ensureInsChrome() {
+    var s = stageEl(); if (!s) return;
+    if (!s.querySelector("#r2r-ins-close")) {
+      var b = document.createElement("button");
+      b.id = "r2r-ins-close"; b.type = "button"; b.title = "Hide inspector"; b.textContent = "»";
+      b.addEventListener("click", closeInspector);
+      s.appendChild(b);
+    }
+    if (!s.querySelector("#r2r-reveal")) {
+      var h = document.createElement("div");
+      h.id = "r2r-reveal"; h.title = "Show clip inspector"; h.textContent = "◀ Clip";
+      h.addEventListener("click", openInspector);
+      s.appendChild(h);
+    }
+  }
+  function syncSnapBox() {
+    var b = S.root && S.root.querySelector('[data-act="snap"]');
+    if (b) b.classList.toggle("active", S.snap);
+  }
   function syncSeq() {
     if (!S.root) return;
     var f = S.root.querySelector(".r2r-fps");
@@ -474,6 +551,11 @@
     else if (k === "arrowright") { e.preventDefault(); setPlayhead(ph() + 1 / (S.edit.fps || 30)); commit(); }
     else if ((e.ctrlKey || e.metaKey) && k === "z" && !e.shiftKey) { e.preventDefault(); clickGr("r2r-undo"); }
     else if ((e.ctrlKey || e.metaKey) && (k === "y" || (k === "z" && e.shiftKey))) { e.preventDefault(); clickGr("r2r-redo"); }
+    else if (k === "i" && !(e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      var s = stageEl();
+      if (s) (s.classList.contains("r2r-ins-collapsed") ? openInspector : closeInspector)();
+    }
   }
 
   // ---- mount ----------------------------------------------------------------
@@ -481,26 +563,54 @@
     root.innerHTML = "";
     var wrap = document.createElement("div"); wrap.className = "r2r-tl";
     wrap.innerHTML =
+      '<video class="r2r-preview" playsinline></video>' +   // playhead-driven, no native controls
       '<div class="r2r-toolbar">' +
-      '  <video class="r2r-preview" controls playsinline></video>' +
-      '  <div class="r2r-tools">' +
-      '    <div class="r2r-transport">' +
-      '      <button class="r2r-play" title="Play / pause (Space)">► / ❚❚</button>' +
-      '      <span class="r2r-readout">0:00.00 / 0:00.00</span>' +
-      '      <button class="r2r-help" title="Keyboard shortcuts">?</button>' +
-      '    </div>' +
-      '    <label>Zoom <input type="range" class="r2r-zoom" min="10" max="400" value="80"></label>' +
-      '    <div class="r2r-tools-row">' +
-      '      <button class="r2r-fit" title="Zoom to fit (F)">Fit</button>' +
-      '      <button class="r2r-razor" title="Razor (R): click a clip to cut it">✂ Razor</button>' +
-      '      <label class="r2r-snaplbl"><input type="checkbox" class="r2r-snap" checked> Snap</label>' +
-      '    </div>' +
-      '    <div class="r2r-tools-row r2r-seq">' +
+      '  <div class="r2r-grp">' +                            // transport
+      '    <button class="r2r-btn" data-act="home" title="Go to start">⏮</button>' +
+      '    <button class="r2r-btn" data-act="fback" title="Back 1s (J)">◀</button>' +
+      '    <button class="r2r-btn r2r-play" data-act="play" title="Play / pause (Space)">►</button>' +
+      '    <button class="r2r-btn" data-act="ffwd" title="Forward 1s (L)">▶</button>' +
+      '    <button class="r2r-btn" data-act="end" title="Go to end">⏭</button>' +
+      '    <span class="r2r-readout">0:00.00 / 0:00.00</span>' +
+      '    <button class="r2r-btn r2r-help" data-act="help" title="Keyboard shortcuts (?)">?</button>' +
+      '  </div>' +
+      '  <div class="r2r-sep"></div>' +
+      '  <div class="r2r-grp">' +                            // edit
+      '    <button class="r2r-btn" data-gr="r2r-undo" title="Undo (⌘Z)">↶</button>' +
+      '    <button class="r2r-btn" data-gr="r2r-redo" title="Redo (⌘⇧Z)">↷</button>' +
+      '    <button class="r2r-btn" data-gr="r2r-split" title="Split at playhead (S)">✂</button>' +
+      '    <button class="r2r-btn r2r-razor" data-act="razor" title="Razor — click a clip to cut (R)">Razor</button>' +
+      '    <button class="r2r-btn" data-gr="r2r-ripple" title="Ripple delete (Del)">⇤</button>' +
+      '    <button class="r2r-btn" data-gr="r2r-lift" title="Delete clip (leave gap)">🗑</button>' +
+      '    <button class="r2r-btn" data-gr="r2r-dup" title="Duplicate clip">⧉</button>' +
+      '  </div>' +
+      '  <div class="r2r-sep"></div>' +
+      '  <div class="r2r-grp">' +                            // insert
+      '    <button class="r2r-btn" data-gr="r2r-addv" title="Add video track">+Video</button>' +
+      '    <button class="r2r-btn" data-gr="r2r-adda" title="Add audio track">+Audio</button>' +
+      '    <button class="r2r-btn" data-gr="r2r-title" title="Add title clip">🆃</button>' +
+      '    <button class="r2r-btn" data-gr="r2r-marker" title="Add marker at playhead">🚩</button>' +
+      '  </div>' +
+      '  <div class="r2r-sep"></div>' +
+      '  <div class="r2r-grp">' +                            // view
+      '    <button class="r2r-btn" data-act="zout" title="Zoom out">−</button>' +
+      '    <input type="range" class="r2r-zoom" min="10" max="400" value="80" title="Zoom">' +
+      '    <span class="r2r-zoomval">80 px/s</span>' +
+      '    <button class="r2r-btn" data-act="zin" title="Zoom in">+</button>' +
+      '    <button class="r2r-btn" data-act="fit" title="Zoom to fit (F)">Fit</button>' +
+      '    <button class="r2r-btn" data-act="zoomsel" title="Zoom to selection (⇧Z)">Sel</button>' +
+      '    <button class="r2r-btn" data-act="snap" title="Toggle snapping">Snap</button>' +
+      '    <button class="r2r-btn" data-act="in" title="Set in mark ([)">[</button>' +
+      '    <button class="r2r-btn" data-act="out" title="Set out mark (])">]</button>' +
+      '  </div>' +
+      '  <div class="r2r-sep"></div>' +
+      '  <div class="r2r-grp r2r-settings">' +               // sequence settings (gear popover)
+      '    <button class="r2r-btn" data-act="gear" title="Timeline FPS / size">⚙</button>' +
+      '    <div class="r2r-seq-pop">' +
       '      <label>FPS <input type="number" class="r2r-fps" min="1" max="120" step="1"></label>' +
       '      <label>Size <input class="r2r-res" size="9" placeholder="1280x720"></label>' +
-      '      <button class="r2r-matchfps" title="Set the timeline fps to the highest source-clip fps">Match fps</button>' +
+      '      <button class="r2r-btn r2r-matchfps" title="Set fps to the highest source-clip fps">Match fps</button>' +
       '    </div>' +
-      '    <small class="r2r-hint">Drag = move · edge = trim · ruler = scrub · S split · Del ripple · ⌘Z undo. Clips conform to the timeline FPS/size on export.</small>' +
       '  </div>' +
       '</div>' +
       '<div class="r2r-scroll"><div class="r2r-ruler"></div><div class="r2r-lanes"></div>' +
@@ -513,13 +623,34 @@
     S.video = wrap.querySelector(".r2r-preview");
     S.readout = wrap.querySelector(".r2r-readout");
     wireRuler();
-    wrap.querySelector(".r2r-zoom").addEventListener("input", function (e) {
-      S.pxPerSec = parseInt(e.target.value, 10) || 80; renderAll(); commit();
+    // One delegated handler: data-gr fires a hidden Gradio button (Python action via
+    // the clickGr bridge); data-act runs a pure client-side view command.
+    wrap.querySelector(".r2r-toolbar").addEventListener("click", function (e) {
+      var el = e.target.closest("[data-gr],[data-act]");
+      if (!el) return;
+      e.preventDefault();
+      if (el.dataset.gr) { clickGr(el.dataset.gr); return; }
+      switch (el.dataset.act) {
+        case "play": togglePlay(); break;
+        case "home": stop(); setPlayhead(0); commit(); break;
+        case "end": stop(); setPlayhead(totalDur()); commit(); break;
+        case "fback": stop(); setPlayhead(ph() - 1); commit(); break;
+        case "ffwd": stop(); setPlayhead(ph() + 1); commit(); break;
+        case "fit": fit(); break;
+        case "zoomsel": zoomToSelection(); break;
+        case "zin": setZoom(S.pxPerSec * 1.3); break;
+        case "zout": setZoom(S.pxPerSec / 1.3); break;
+        case "snap": S.snap = !S.snap; el.classList.toggle("active", S.snap); commit(); break;
+        case "razor": toggleRazor(); break;
+        case "in": S.edit.ui = S.edit.ui || {}; S.edit.ui["in"] = ph(); renderAll(); commit(); break;
+        case "out": S.edit.ui = S.edit.ui || {}; S.edit.ui["out"] = ph(); renderAll(); commit(); break;
+        case "gear": var pop = wrap.querySelector(".r2r-seq-pop"); if (pop) pop.classList.toggle("open"); break;
+        case "help": toggleHelp(); break;
+      }
     });
-    wrap.querySelector(".r2r-play").addEventListener("click", togglePlay);
-    wrap.querySelector(".r2r-fit").addEventListener("click", fit);
-    wrap.querySelector(".r2r-razor").addEventListener("click", toggleRazor);
-    wrap.querySelector(".r2r-snap").addEventListener("change", function (e) { S.snap = e.target.checked; commit(); });
+    wrap.querySelector(".r2r-zoom").addEventListener("input", function (e) {
+      setZoom(parseInt(e.target.value, 10) || 80);
+    });
     wrap.querySelector(".r2r-fps").addEventListener("change", function (e) {
       S.edit.fps = Math.max(1, parseInt(e.target.value, 10) || 30); renderAll(); commit();
     });
@@ -546,13 +677,13 @@
         if (!isNaN(t)) { stop(); setPlayhead(Math.max(0, t)); commit(); }
       });
     }
-    var help = wrap.querySelector(".r2r-help");
-    if (help) help.addEventListener("click", toggleHelp);
+    ensureInsChrome();
     S.mounted = true; renderAll(); syncSnapBox();
   }
   function tryMount() {
     var root = document.getElementById(ROOT_ID);
     if (root && (!root.querySelector(".r2r-tl") || !S.mounted)) buildSkeleton(root);
+    ensureInsChrome();   // idempotent: re-attach >>/reveal chrome on #r2r-stage after re-mounts
   }
   function boot() {
     tryMount();

@@ -20,8 +20,45 @@ _TAB_IDS = {"library": "reel2reel-lib", "timeline": "reel2reel-tl",
 _LABELS = {"library": "📚 Library", "timeline": "🎞 Timeline", "render": "🎬 Render"}
 
 
+def _projbar() -> dict:
+    """Persistent project/version bar — rendered ABOVE the sub-tabs so it shows on
+    every Reel2Reel page. Hot path (open/save/snapshot) inline; rare/destructive ops
+    tucked behind one disclosure. plugin.py wires it via _wire_projects(ui['bar'])."""
+    c = {}
+    with gr.Row(elem_id="reel2reel-projbar"):
+        c["current_lbl"] = gr.Markdown("*No project open*")
+        c["proj_dd"] = gr.Dropdown(label="Open project", choices=[], scale=2,
+                                  container=False)
+        c["open"] = gr.Button("Open", scale=0)
+        c["save"] = gr.Button("💾 Save", scale=0, elem_classes="reel2reel-prim")
+        c["ver_label"] = gr.Textbox(placeholder="snapshot name", scale=1,
+                                   container=False, show_label=False)
+        c["snapshot"] = gr.Button("📸 Snapshot", scale=0)
+        c["bar_status"] = gr.Markdown("", elem_id="reel2reel-bar-status")
+    with gr.Accordion("⚙ Manage project · versions · interchange", open=False,
+                      elem_id="reel2reel-manage"):
+        c["proj_name"] = gr.Textbox(label="Name (New / Save as / Rename / Duplicate)")
+        with gr.Row():
+            c["new"] = gr.Button("New")
+            c["saveas"] = gr.Button("Save as")
+            c["rename"] = gr.Button("Rename")
+            c["dup"] = gr.Button("Duplicate")
+            c["delete"] = gr.Button("🗑 Delete")
+            c["restore_auto"] = gr.Button("↺ Restore autosave")
+        with gr.Row():
+            c["ver_dd"] = gr.Dropdown(label="Versions", choices=[], scale=2)
+            c["restore"] = gr.Button("Restore")
+            c["delver"] = gr.Button("Delete version")
+        with gr.Row():
+            c["otio_export"] = gr.DownloadButton("⬇ Export .otio", size="sm")
+            c["otio_import"] = gr.UploadButton("⬆ Import .otio",
+                                              file_types=[".otio", ".json"], size="sm")
+    return c
+
+
 def build_suite() -> dict:
     pages = {}
+    bar = _projbar()
     with gr.Tabs() as subtabs:
         for mode in page.MODES:
             with gr.Tab(_LABELS[mode], id=_TAB_IDS[mode]):
@@ -29,4 +66,4 @@ def build_suite() -> dict:
         with gr.Tab("⚙ Settings", id=_TAB_IDS["settings"]):
             settings = build_settings_panel()
     return {"subtabs": subtabs, "tab_ids": _TAB_IDS, "pages": pages,
-            "settings": settings}
+            "settings": settings, "bar": bar}

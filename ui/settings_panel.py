@@ -12,32 +12,34 @@ from ..core import paths, render
 
 def build_settings_panel() -> dict:
     c = {}
-    with gr.Column():
-        gr.Markdown("### Directories\n"
-                    "Where Reel2Reel keeps projects and renders, and where it "
-                    "imports clips from. Repoint any of them; saved to "
-                    "`<wan2gp_root>/.reel2reel.json`.")
-        c["projects_dir"] = gr.Textbox(label="Projects dir (saved timelines)",
-                                       value=str(paths.projects_dir()))
-        c["renders_dir"] = gr.Textbox(label="Renders dir (exported mp4)",
-                                      value=str(paths.renders_dir()))
-        c["wan2gp_outputs_dir"] = gr.Textbox(
-            label="Import-from dir (Wan2GP outputs — read-only source)",
-            value=str(paths.wan2gp_outputs_dir()))
-        with gr.Row():
-            c["save_dirs"] = gr.Button("Save directories", variant="primary",
-                                      elem_classes="reel2reel-prim")
-            c["rescan"] = gr.Button("Rescan library")
-        c["dirs_status"] = gr.Markdown("")
+    with gr.Column(elem_id="r2r-settings"):
+        with gr.Group():
+            gr.Markdown("**Directories** — where Reel2Reel keeps projects/renders and "
+                        "imports clips from (saved to `<wan2gp_root>/.reel2reel.json`).")
+            c["projects_dir"] = gr.Textbox(label="Projects dir (saved timelines)",
+                                           value=str(paths.projects_dir()))
+            c["renders_dir"] = gr.Textbox(label="Renders dir (exported mp4)",
+                                          value=str(paths.renders_dir()))
+            c["wan2gp_outputs_dir"] = gr.Textbox(
+                label="Import-from dir (Wan2GP outputs — read-only source)",
+                value=str(paths.wan2gp_outputs_dir()))
+            with gr.Row():
+                c["save_dirs"] = gr.Button("Save directories", variant="primary",
+                                          elem_classes="reel2reel-prim")
+                c["rescan"] = gr.Button("Rescan library")
+            c["dirs_status"] = gr.Markdown("")
 
-        gr.Markdown("### Cache")
-        c["cache_status"] = gr.Markdown(cache_md())
         with gr.Row():
-            c["clear_renders"] = gr.Checkbox(label="also delete rendered mp4s", value=False)
-            c["clear_cache"] = gr.Button("🧹 Clear cache")
-
-        gr.Markdown("### ffmpeg")
-        c["ffmpeg_status"] = gr.Markdown(ffmpeg_md())
+            with gr.Group():
+                gr.Markdown("**Cache**")
+                c["cache_status"] = gr.Markdown(cache_md())
+                with gr.Row():
+                    c["clear_renders"] = gr.Checkbox(label="also delete rendered mp4s",
+                                                    value=False)
+                    c["clear_cache"] = gr.Button("🧹 Clear cache")
+            with gr.Group():
+                gr.Markdown("**ffmpeg**")
+                c["ffmpeg_status"] = gr.Markdown(ffmpeg_md())
     return c
 
 
