@@ -40,6 +40,63 @@ def color_vf(color: dict | None) -> str:
     return ",".join(parts)
 
 
+def _clamp(v, lo, hi, default):
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, v))
+
+
+def master_vf(master: dict | None) -> str:
+    """Whole-cut video finish chain (denoise → grade → LUT → sharpen); "" if neutral.
+
+    Each stage is gated by its ``*_on`` flag. Values are CLAMPED to conservative
+    ranges so a master grade applied on top of per-clip grades can't shove the
+    picture into clipping / oversaturation (a guardrail against a janky finish).
+    """
+    if not isinstance(master, dict):
+        return ""
+    parts = []
+    if master.get("denoise_on"):
+        d = _clamp(master.get("denoise", 4.0), 0.0, 12.0, 4.0)
+        if d > 0.05:
+            parts.append(f"hqdn3d={d:.2f}:{d:.2f}:{d * 1.5:.2f}:{d * 1.5:.2f}")
+    if master.get("color_on"):
+        b = _clamp(master.get("brightness", 0.0), -0.5, 0.5, 0.0)
+        c = _clamp(master.get("contrast", 1.0), 0.5, 1.6, 1.0)
+        s = _clamp(master.get("saturation", 1.0), 0.0, 1.8, 1.0)
+        temp = _clamp(master.get("temp", 0.0), -1.0, 1.0, 0.0)
+        if abs(b) > 1e-3 or abs(c - 1) > 1e-3 or abs(s - 1) > 1e-3:
+            parts.append(f"eq=brightness={b:.3f}:contrast={c:.3f}:saturation={s:.3f}")
+        if abs(temp) > 1e-3:
+            parts.append(f"colorchannelmixer=rr={1 + 0.2 * temp:.3f}:bb={1 - 0.2 * temp:.3f}")
+    if master.get("lut_on"):
+        p = str(master.get("lut_path") or "").strip()
+        if p:
+            esc = p.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+            parts.append(f"lut3d='{esc}'")
+    if master.get("sharpen_on"):
+        a = _clamp(master.get("sharpen", 0.8), 0.0, 2.0, 0.8)
+        if a > 0.02:
+            parts.append(f"unsharp=5:5:{a:.3f}:5:5:0.0")
+    return ",".join(parts)
+
+
+def master_af(master: dict | None) -> str:
+    """Whole-cut audio finish: single-pass EBU R128 loudness normalisation.
+
+    ON by default at -16 LUFS (the long-standing baseline) — the master controls
+    only retarget or disable it (loud_on=False), so we never double-apply loudnorm.
+    Returns "" when disabled.
+    """
+    m = master if isinstance(master, dict) else {}
+    if m.get("loud_on") is False:
+        return ""
+    lufs = _clamp(m.get("loud_lufs", -16.0), -31.0, -9.0, -16.0)
+    return f"loudnorm=I={lufs:.1f}:TP=-1.5:LRA=11"
+
+
 def speed_vf(speed: float, reverse: bool) -> str:
     """Video setpts for speed + optional reverse. Speed>1 = faster."""
     parts = []

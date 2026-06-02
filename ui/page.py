@@ -179,6 +179,32 @@ def _render() -> dict:
                         ["timeline", "1920x1080", "1280x720", "1080x1080",
                          "720x1280", "854x480"],
                         value="timeline", label="Resolution")
+                with gr.Accordion("✨ Finish — applied once to the whole cut", open=False):
+                    gr.Markdown("*Each stage is optional and stacks on top of per-clip "
+                                "grades; values are clamped so the master can't over-process. "
+                                "Hit **Preview** to check the look before exporting.*")
+                    with gr.Group():
+                        c["mst_color_on"] = gr.Checkbox(label="Master colour grade")
+                        c["mst_bright"] = gr.Slider(-0.5, 0.5, value=0, step=0.02, label="Brightness")
+                        c["mst_contrast"] = gr.Slider(0.5, 1.6, value=1, step=0.02, label="Contrast")
+                        c["mst_sat"] = gr.Slider(0, 1.8, value=1, step=0.02, label="Saturation")
+                        c["mst_temp"] = gr.Slider(-1, 1, value=0, step=0.02, label="Temp (cool↔warm)")
+                    with gr.Group():
+                        c["mst_loud_on"] = gr.Checkbox(label="Normalize loudness", value=True)
+                        c["mst_lufs"] = gr.Slider(-31, -9, value=-16, step=1,
+                                                 label="Target loudness (LUFS)")
+                    with gr.Group():
+                        c["mst_sharpen_on"] = gr.Checkbox(label="Sharpen")
+                        c["mst_sharpen"] = gr.Slider(0, 2, value=0.8, step=0.05, label="Sharpen amount")
+                        c["mst_denoise_on"] = gr.Checkbox(label="Denoise")
+                        c["mst_denoise"] = gr.Slider(0, 12, value=4, step=0.5, label="Denoise strength")
+                    with gr.Group():
+                        c["mst_lut_on"] = gr.Checkbox(label="Apply 3D LUT (.cube)")
+                        with gr.Row():
+                            c["mst_lut"] = gr.UploadButton("⬆ Load .cube", size="sm",
+                                                          file_types=[".cube"], file_count="single")
+                            c["mst_lut_name"] = gr.Markdown("*no LUT loaded*")
+                        c["mst_lut_path"] = gr.State("")
                 with gr.Group():
                     c["range_on"] = gr.Checkbox(label="Export range only")
                     with gr.Row(elem_classes="r2r-range-row"):

@@ -141,7 +141,8 @@ class Timeline:
     def __init__(self, name: str = "Cut 1", fps: int = 30, width: int = 1280,
                  height: int = 720, sample_rate: int = 48000,
                  tracks: Optional[list] = None, transitions: Optional[list] = None,
-                 markers: Optional[list] = None, ui: Optional[dict] = None):
+                 markers: Optional[list] = None, ui: Optional[dict] = None,
+                 master: Optional[dict] = None):
         self.name = name
         self.fps = int(fps)
         self.width = int(width)
@@ -150,6 +151,12 @@ class Timeline:
         self.tracks: list[Track] = tracks if tracks is not None else []
         self.transitions: list[Transition] = transitions if transitions is not None else []
         self.markers: list[Marker] = markers if markers is not None else []
+        # Whole-cut "finish" stage applied once to the final composite — see
+        # effects.master_vf / master_af. Keys (all optional, each gated by its *_on):
+        #   color_on, brightness, contrast, saturation, temp,
+        #   sharpen_on, sharpen, denoise_on, denoise,
+        #   lut_on, lut_path, loud_on, loud_lufs
+        self.master: dict = master or {}
         self.ui: dict = ui or {"px_per_sec": 80, "playhead": 0.0, "selected": None,
                                "selection": [], "snap": True}
         if tracks is None and not self.tracks:
@@ -581,6 +588,9 @@ class Timeline:
 
     @classmethod
     def from_edit_json(cls, d: dict) -> "Timeline":
+        # NB: master (the render-time finish stage) is intentionally NOT round-tripped
+        # through the browser edit payload — it's set server-side from the Render-tab
+        # controls at export/preview time, so the JS can't clobber it.
         tl = cls(name=d.get("name", "Cut 1"), fps=int(d.get("fps", 30)),
                  width=int(d.get("width", 1280)), height=int(d.get("height", 720)),
                  sample_rate=int(d.get("sample_rate", 48000)), tracks=[],

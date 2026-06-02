@@ -1381,14 +1381,23 @@ class Reel2Reel(WAN2GPPlugin):
 
     # -- render -------------------------------------------------------------
     def _wire_render(self, c):
+        # The master "finish" controls are read at export/preview time (not round-tripped
+        # through the timeline), so the JS can never clobber them. Ordered to match the
+        # tail of _render / _preview and _pack_master.
+        mst = [c["mst_color_on"], c["mst_bright"], c["mst_contrast"], c["mst_sat"],
+               c["mst_temp"], c["mst_loud_on"], c["mst_lufs"], c["mst_sharpen_on"],
+               c["mst_sharpen"], c["mst_denoise_on"], c["mst_denoise"], c["mst_lut_on"],
+               c["mst_lut_path"]]
         c["export"].click(
             self._render,
             inputs=[c["preset"], c["quality"], c["resolution"], c["range_on"],
-                    c["range_start"], c["range_end"]],
+                    c["range_start"], c["range_end"]] + mst,
             outputs=[c["video"], c["save_as"], c["log"]])
         c["cancel"].click(self._cancel_render, outputs=[c["log"]])
-        c["preview"].click(self._preview, inputs=[c["preview_secs"]],
+        c["preview"].click(self._preview, inputs=[c["preview_secs"]] + mst,
                           outputs=[c["video"], c["log"]])
+        c["mst_lut"].upload(self._master_lut, inputs=[c["mst_lut"]],
+                           outputs=[c["mst_lut_path"], c["mst_lut_name"]])
         # The final cut is a VIDEO, so send it to the Video Generator as a Vid2Vid
         # source — the same host path the clip menu's "Send to Vid2Vid" uses
         # (get_current_model_settings + a form-refresh trigger + tab switch).
@@ -1407,8 +1416,39 @@ class Reel2Reel(WAN2GPPlugin):
         else:
             c["to_i2v"].click(self._cut_unavailable, outputs=[c["log"]])
 
+    @staticmethod
+    def _pack_master(color_on, bright, contrast, sat, temp, loud_on, lufs,
+                     sharpen_on, sharpen, denoise_on, denoise, lut_on, lut_path):
+        return {"color_on": bool(color_on), "brightness": float(bright),
+                "contrast": float(contrast), "saturation": float(sat), "temp": float(temp),
+                "loud_on": bool(loud_on), "loud_lufs": float(lufs),
+                "sharpen_on": bool(sharpen_on), "sharpen": float(sharpen),
+                "denoise_on": bool(denoise_on), "denoise": float(denoise),
+                "lut_on": bool(lut_on), "lut_path": str(lut_path or "")}
+
+    def _master_lut(self, f):
+        """Persist an uploaded .cube into renders_dir and report its name."""
+        import shutil
+        src = f if isinstance(f, str) else getattr(f, "name", None)
+        if not src or not Path(src).exists():
+            return "", "*no LUT loaded*"
+        dest = paths.renders_dir() / Path(src).name
+        try:
+            paths.renders_dir().mkdir(parents=True, exist_ok=True)
+            if str(Path(src).resolve()) != str(dest.resolve()):
+                shutil.copy2(src, dest)
+            path = str(dest)
+        except Exception:
+            path = src
+        return path, f"LUT: **{Path(path).name}**"
+
     def _render(self, preset, quality, resolution, range_on, rstart, rend,
+                m_color_on, m_bright, m_contrast, m_sat, m_temp, m_loud_on, m_lufs,
+                m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_lut_on, m_lut_path,
                 progress=gr.Progress()):
+        self._project.master = self._pack_master(
+            m_color_on, m_bright, m_contrast, m_sat, m_temp, m_loud_on, m_lufs,
+            m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_lut_on, m_lut_path)
         self._cancel_event.clear()
         w = h = None
         if resolution and "x" in str(resolution).lower():
@@ -1435,8 +1475,14 @@ class Reel2Reel(WAN2GPPlugin):
         self._cancel_event.set()
         return "Cancelling render…"
 
-    def _preview(self, secs, progress=gr.Progress()):
-        """A true low-res composite of a window at the playhead (the real cut)."""
+    def _preview(self, secs, m_color_on, m_bright, m_contrast, m_sat, m_temp, m_loud_on,
+                 m_lufs, m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_lut_on,
+                 m_lut_path, progress=gr.Progress()):
+        """A true low-res composite of a window at the playhead (the real cut) — WITH
+        the master finish stage, so you see the final look before committing."""
+        self._project.master = self._pack_master(
+            m_color_on, m_bright, m_contrast, m_sat, m_temp, m_loud_on, m_lufs,
+            m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_lut_on, m_lut_path)
         self._cancel_event.clear()
         ph = float((self._project.ui or {}).get("playhead", 0.0))
         secs = float(secs or 8)

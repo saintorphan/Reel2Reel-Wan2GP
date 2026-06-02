@@ -402,7 +402,13 @@ def export(tl, out_path=None, preset="mp4", quality="high", width=None, height=N
         filt.append(f"[{vbase}]{dt}:enable='between(t\\,{s:.3f}\\,{e:.3f})'[vb{vi + 1}]")
         vbase = f"vb{vi + 1}"; vi += 1
 
-    filt.append(f"[{vbase}]format={PIX}[vout]")
+    # Whole-cut "finish": fold the master video chain in right before [vout] so BOTH
+    # the encode and the GIF path inherit it; master_af carries the (retargetable)
+    # loudnorm into the audio mix below. See effects.master_vf / master_af.
+    master = getattr(tl, "master", None)
+    mvf = effects.master_vf(master)
+    maf = effects.master_af(master)
+    filt.append(f"[{vbase}]format={PIX}" + (("," + mvf) if mvf else "") + "[vout]")
 
     # AUDIO — gain/fade/overlap-fade, delay to position, mix + loudnorm.
     # Kept in its own list so the (audio-less) GIF path can use video only.
@@ -424,11 +430,12 @@ def export(tl, out_path=None, preset="mp4", quality="high", width=None, height=N
         ch.append(f"adelay={int(round(max(0, c.start) * 1000))}:all=1")
         afilt.append(",".join(ch) + f"[a{i}]")
         a_labels.append(f"[a{i}]")
+    _ln = ("," + maf) if maf else ""
     if len(a_labels) == 1:
-        afilt.append(f"{a_labels[0]}aresample={AR},loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
+        afilt.append(f"{a_labels[0]}aresample={AR}{_ln}[aout]")
     elif a_labels:
         afilt.append(f"{''.join(a_labels)}amix=inputs={len(a_labels)}:duration=longest:"
-                     f"normalize=0:dropout_transition=0,loudnorm=I=-16:TP=-1.5:LRA=11[aout]")
+                     f"normalize=0:dropout_transition=0{_ln}[aout]")
     else:
         afilt.append(f"anullsrc=channel_layout=stereo:sample_rate={AR}[aout]")
 
