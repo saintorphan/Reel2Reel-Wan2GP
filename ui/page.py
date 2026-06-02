@@ -199,9 +199,14 @@ def _render() -> dict:
                         c["mst_denoise_on"] = gr.Checkbox(label="Denoise")
                         c["mst_denoise"] = gr.Slider(0, 12, value=4, step=0.5, label="Denoise strength")
                     with gr.Group():
-                        c["mst_interp_on"] = gr.Checkbox(label="Frame interpolation (smooth motion / fps boost)")
+                        c["mst_interp_mode"] = gr.Dropdown(
+                            ["off", "minterpolate", "rife2", "rife4"], value="off",
+                            label="Frame interpolation",
+                            info="rife2/rife4 = host RIFE ×2/×4 (GPU, best, short cuts); "
+                                 "minterpolate = ffmpeg (any length, slower, can smear). "
+                                 "Falls back to minterpolate if RIFE is unavailable.")
                         c["mst_interp_fps"] = gr.Slider(24, 120, value=60, step=1,
-                                                       label="Target fps — ffmpeg minterpolate (slow; output also conforms to Lanczos scaling)")
+                                                       label="Target fps (minterpolate only)")
                     with gr.Group():
                         c["mst_lut_on"] = gr.Checkbox(label="Apply 3D LUT (.cube)")
                         with gr.Row():

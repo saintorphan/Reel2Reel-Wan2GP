@@ -1386,7 +1386,7 @@ class Reel2Reel(WAN2GPPlugin):
         # tail of _render / _preview and _pack_master.
         mst = [c["mst_color_on"], c["mst_bright"], c["mst_contrast"], c["mst_sat"],
                c["mst_temp"], c["mst_loud_on"], c["mst_lufs"], c["mst_sharpen_on"],
-               c["mst_sharpen"], c["mst_denoise_on"], c["mst_denoise"], c["mst_interp_on"],
+               c["mst_sharpen"], c["mst_denoise_on"], c["mst_denoise"], c["mst_interp_mode"],
                c["mst_interp_fps"], c["mst_lut_on"], c["mst_lut_path"]]
         c["export"].click(
             self._render,
@@ -1418,14 +1418,14 @@ class Reel2Reel(WAN2GPPlugin):
 
     @staticmethod
     def _pack_master(color_on, bright, contrast, sat, temp, loud_on, lufs,
-                     sharpen_on, sharpen, denoise_on, denoise, interp_on, interp_fps,
+                     sharpen_on, sharpen, denoise_on, denoise, interp_mode, interp_fps,
                      lut_on, lut_path):
         return {"color_on": bool(color_on), "brightness": float(bright),
                 "contrast": float(contrast), "saturation": float(sat), "temp": float(temp),
                 "loud_on": bool(loud_on), "loud_lufs": float(lufs),
                 "sharpen_on": bool(sharpen_on), "sharpen": float(sharpen),
                 "denoise_on": bool(denoise_on), "denoise": float(denoise),
-                "interp_on": bool(interp_on), "interp_fps": float(interp_fps),
+                "interp": str(interp_mode or "off"), "interp_fps": float(interp_fps),
                 "lut_on": bool(lut_on), "lut_path": str(lut_path or "")}
 
     def _master_lut(self, f):
@@ -1446,12 +1446,20 @@ class Reel2Reel(WAN2GPPlugin):
 
     def _render(self, preset, quality, resolution, range_on, rstart, rend,
                 m_color_on, m_bright, m_contrast, m_sat, m_temp, m_loud_on, m_lufs,
-                m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_interp_on, m_interp_fps,
+                m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_interp_mode, m_interp_fps,
                 m_lut_on, m_lut_path, progress=gr.Progress()):
-        self._project.master = self._pack_master(
+        from .core import rife
+        master = self._pack_master(
             m_color_on, m_bright, m_contrast, m_sat, m_temp, m_loud_on, m_lufs,
-            m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_interp_on, m_interp_fps,
+            m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_interp_mode, m_interp_fps,
             m_lut_on, m_lut_path)
+        # RIFE runs as a post-encode pass; if it's selected but unavailable, fall back
+        # to ffmpeg minterpolate inside the filtergraph so the user still gets smoothing.
+        mode = master.get("interp", "off")
+        use_rife = mode in ("rife2", "rife4") and rife.available()
+        if mode in ("rife2", "rife4") and not use_rife:
+            master["interp"] = "minterpolate"
+        self._project.master = master
         self._cancel_event.clear()
         w = h = None
         if resolution and "x" in str(resolution).lower():
@@ -1471,22 +1479,38 @@ class Reel2Reel(WAN2GPPlugin):
         except Exception as e:
             traceback.print_exc()
             return gr.update(), gr.update(), f"❌ Render failed: {e}"
+        msg = f"✅ Rendered `{out}`"
+        if use_rife:
+            exp = 1 if mode == "rife2" else 2
+            dest = str(paths.renders_dir() / (Path(out).stem + f"_rife{2 ** exp}x.mp4"))
+            r = rife.interpolate_file(out, dest, exp,
+                                      progress=lambda f, d: progress(f, desc=d))
+            if r:
+                out = r; msg = f"✅ Rendered + RIFE ×{2 ** exp} `{out}`"
+            else:
+                gr.Warning("RIFE unavailable or the cut was too long for it — "
+                           "exported without interpolation (try minterpolate).")
         self._last_render = out
-        return out, gr.update(value=out), f"✅ Rendered `{out}`"
+        return out, gr.update(value=out), msg
 
     def _cancel_render(self):
         self._cancel_event.set()
         return "Cancelling render…"
 
     def _preview(self, secs, m_color_on, m_bright, m_contrast, m_sat, m_temp, m_loud_on,
-                 m_lufs, m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_interp_on,
+                 m_lufs, m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_interp_mode,
                  m_interp_fps, m_lut_on, m_lut_path, progress=gr.Progress()):
         """A true low-res composite of a window at the playhead (the real cut) — WITH
         the master finish stage, so you see the final look before committing."""
-        self._project.master = self._pack_master(
+        master = self._pack_master(
             m_color_on, m_bright, m_contrast, m_sat, m_temp, m_loud_on, m_lufs,
-            m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_interp_on, m_interp_fps,
+            m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_interp_mode, m_interp_fps,
             m_lut_on, m_lut_path)
+        # Preview is meant to be quick: approximate RIFE with minterpolate (RIFE only
+        # runs on the real export, where it's worth the GPU/decode cost).
+        if master.get("interp") in ("rife2", "rife4"):
+            master["interp"] = "minterpolate"
+        self._project.master = master
         self._cancel_event.clear()
         ph = float((self._project.ui or {}).get("playhead", 0.0))
         secs = float(secs or 8)
