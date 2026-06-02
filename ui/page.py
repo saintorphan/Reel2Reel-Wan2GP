@@ -105,8 +105,12 @@ def _timeline() -> dict:
                 c["ins_tx"] = gr.Textbox(label="X (px or center)", value="center")
                 c["ins_ty"] = gr.Textbox(label="Y (px or center)", value="center")
             with gr.Row():
-                c["ins_scale"] = gr.Slider(0.05, 4, value=1, step=0.05, label="Scale")
+                c["ins_scale"] = gr.Slider(0.05, 4, value=1, step=0.05, label="Scale (resize/zoom)")
                 c["ins_rotate"] = gr.Slider(-180, 180, value=0, step=1, label="Rotate °")
+            with gr.Row():
+                c["ins_fit"] = gr.Dropdown(["fit", "fill", "stretch"], value="fit",
+                                          label="Fit (fill = crop-to-fit)")
+                c["ins_crop"] = gr.Slider(0, 0.45, value=0, step=0.01, label="Crop / zoom-in")
         c["ins_apply"] = gr.Button("Apply to selected clip", variant="primary",
                                    elem_classes="reel2reel-prim")
         with gr.Row():

@@ -73,6 +73,27 @@ def xfade_transition(kind: str, direction: str = "left") -> str:
     return _XFADE.get(kind, "dissolve")
 
 
+def crop_vf(geometry: dict | None) -> str:
+    """Uniform center crop (zoom-in) from geometry['crop'] (0..0.45 per edge)."""
+    if not isinstance(geometry, dict):
+        return ""
+    try:
+        c = float(geometry.get("crop", 0) or 0)
+    except (TypeError, ValueError):
+        return ""
+    c = max(0.0, min(0.45, c))
+    if c < 1e-3:
+        return ""
+    return f"crop=iw*{1 - 2 * c:.4f}:ih*{1 - 2 * c:.4f}:iw*{c:.4f}:ih*{c:.4f}"
+
+
+def fit_mode(geometry: dict | None) -> str:
+    """How a full-frame clip maps to the canvas: fit (letterbox) | fill (crop to
+    fill) | stretch (distort)."""
+    m = geometry.get("fit", "fit") if isinstance(geometry, dict) else "fit"
+    return m if m in ("fit", "fill", "stretch") else "fit"
+
+
 def geometry_scale(geometry: dict | None) -> float:
     if isinstance(geometry, dict):
         try:

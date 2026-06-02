@@ -52,6 +52,31 @@
 }
 .r2r-tl .r2r-head span { overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
 .r2r-tl .r2r-head small { color: #7f8490; font-size: 9px; }
+.r2r-tl .r2r-collapse {
+  position: absolute; top: 2px; right: 4px; width: 16px; height: 16px; padding: 0;
+  background: transparent; color: #8b8f99; border: 0; cursor: pointer; font-size: 10px;
+}
+.r2r-tl .r2r-head { position: relative; }
+
+.r2r-tl .r2r-help {
+  background: transparent; color: #c9c6bf; border: 1px solid var(--r2r-edge);
+  border-radius: 50%; width: 22px; height: 22px; cursor: pointer; font-weight: 700;
+}
+.r2r-help-modal {
+  position: fixed; inset: 0; z-index: 100000; background: rgba(0,0,0,0.55);
+  display: flex; align-items: center; justify-content: center;
+}
+.r2r-help-modal .r2r-help-card {
+  background: #15161a; color: #e9e6df; border: 1px solid #33363f; border-radius: 12px;
+  padding: 18px 22px; max-width: 620px; font-family: sans-serif; font-size: 13px;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.6);
+}
+.r2r-help-modal h3 { margin: 0 0 10px; color: #e0a106; }
+.r2r-help-modal ul { margin: 0 0 12px; padding-left: 18px; line-height: 1.7; }
+.r2r-help-modal .r2r-help-close {
+  background: #e0a106; color: #1a1405; border: 0; border-radius: 6px;
+  padding: 6px 16px; cursor: pointer; font-weight: 600;
+}
 .r2r-tl .r2r-lane {
   position: relative; flex: 1; height: 52px;
   background: var(--r2r-lane); border-bottom: 1px solid var(--r2r-edge);
@@ -120,10 +145,12 @@
 
 /* transport + tool rows */
 .r2r-tl .r2r-transport { display: flex; gap: 10px; align-items: center; }
-.r2r-tl .r2r-transport button, .r2r-tl .r2r-fit {
+.r2r-tl .r2r-transport button, .r2r-tl .r2r-fit, .r2r-tl .r2r-razor {
   background: var(--r2r-amber); color: #1a1405; border: 1px solid var(--r2r-amber-dk);
   border-radius: 5px; padding: 3px 10px; cursor: pointer; font-weight: 600; font-size: 11px;
 }
+.r2r-tl .r2r-razor.active { background: #ff3b3b; color: #fff; border-color: #b02020; }
+.r2r-tl.r2r-razor-on .r2r-clip { cursor: crosshair; }
 .r2r-tl .r2r-readout { color: #c9c6bf; font-variant-numeric: tabular-nums; }
 .r2r-tl .r2r-tools-row { display: flex; gap: 12px; align-items: center; }
 .r2r-tl .r2r-snaplbl { display: flex; gap: 5px; align-items: center; }

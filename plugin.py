@@ -104,7 +104,11 @@ _CTX_MENU_JS = (
     "M.register('.r2r-timeline-clip','Send to Vid2Vid',function(el){relay('vid2vid|'+rid(el));});"
     "M.register('.r2r-timeline-clip','Send → I2V first frame',function(el){relay('start|'+rid(el));});"
     "M.register('.r2r-timeline-clip','Send → I2V last frame',function(el){relay('end|'+rid(el));});"
-    "M.register('.r2r-timeline-clip','Send → sliding-window anchor',function(el){relay('anchor|'+rid(el));});}"
+    "M.register('.r2r-timeline-clip','Send → sliding-window anchor',function(el){relay('anchor|'+rid(el));});"
+    "M.register('.r2r-timeline-clip','Split at playhead',function(el){relay('csplit|'+rid(el));});"
+    "M.register('.r2r-timeline-clip','Duplicate',function(el){relay('cdup|'+rid(el));});"
+    "M.register('.r2r-timeline-clip','Detach audio',function(el){relay('cdetach|'+rid(el));});"
+    "M.register('.r2r-timeline-clip','Delete clip',function(el){relay('cdel|'+rid(el));});}"
     "})()\">")
 
 
@@ -146,6 +150,7 @@ class Reel2Reel(WAN2GPPlugin):
         self._gbin_view: list[dict] = []
         self._ctx_out: list[str] = []      # context-menu relay output order
         self._cancel_event = threading.Event()
+        self._clipboard: dict | None = None
 
     # -- lifecycle ----------------------------------------------------------
     def setup_ui(self):
@@ -379,8 +384,8 @@ class Reel2Reel(WAN2GPPlugin):
             return
         # Ordered outputs; the handler returns values positionally for whichever
         # targets exist on this host.
-        out = [("bin", lib["bin_gallery"]), ("global", lib["global_gallery"]),
-               ("status", lib["status"])]
+        out = [("tl", self.tl_from_py), ("bin", lib["bin_gallery"]),
+               ("global", lib["global_gallery"]), ("status", lib["status"])]
         rft = getattr(self, "refresh_form_trigger", None)
         mt = getattr(self, "main_tabs", None)
         if rft is not None:
@@ -419,7 +424,82 @@ class Reel2Reel(WAN2GPPlugin):
             elif cmd in ("vid2vid", "start", "end", "anchor"):
                 which = "vid" if cmd == "vid2vid" else cmd
                 upd["status"] = self._send_to_gen(state, payload, which, upd)
+            elif cmd in ("csplit", "cdel", "cdup", "cdetach", "copy", "cut", "paste",
+                         "delsel", "razor"):
+                upd["status"] = self._clip_action(cmd, payload, upd)
         return upd[names[0]] if len(names) == 1 else tuple(upd[n] for n in names)
+
+    def _clip_action(self, cmd, payload, upd):
+        """Per-clip context-menu actions + clipboard, relayed from the timeline."""
+        ph = float((self._project.ui or {}).get("playhead", 0.0))
+        if cmd == "copy":
+            ids = [x for x in payload.split(",") if x]
+            self._clipboard = self._project.serialize_clips(ids)
+            return f"Copied {len(self._clipboard.get('clips', []))} clip(s)."
+        if cmd == "cut":
+            ids = [x for x in payload.split(",") if x]
+            self._clipboard = self._project.serialize_clips(ids)
+            self._push_undo()
+            n = self._project.remove_clips(ids)
+            self._project.ui["selected"] = None
+            upd["tl"] = self._env_after()
+            return f"Cut {n} clip(s)."
+        if cmd == "paste":
+            if not self._clipboard or not self._clipboard.get("clips"):
+                return "Clipboard is empty."
+            self._push_undo()
+            new = self._project.paste_clips(self._clipboard, at=ph)
+            upd["tl"] = self._env_after()
+            return f"Pasted {len(new)} clip(s) at {ph:.2f}s."
+        if cmd == "razor":                       # razor tool: cut clip at a clicked time
+            p = payload.split("|")
+            cid = p[0]
+            try:
+                t = float(p[1]) if len(p) > 1 else ph
+            except ValueError:
+                t = ph
+            track, _ = self._project.find_clip(cid)
+            if track is None:
+                return "Clip not found."
+            self._push_undo()
+            n = len(self._project.split_at(track.id, t))
+            upd["tl"] = self._env_after()
+            return f"Razor cut at {t:.2f}s ({n} new)."
+        if cmd == "delsel":
+            ids = [x for x in payload.split(",") if x]
+            if not ids:
+                return "Nothing selected."
+            self._push_undo()
+            n = self._project.remove_clips(ids)
+            self._project.ui["selected"] = None
+            upd["tl"] = self._env_after()
+            return f"Deleted {n} clip(s)."
+        track, clip = self._project.find_clip(payload)
+        if clip is None:
+            return "Clip not found."
+        self._push_undo()
+        if cmd == "csplit":
+            n = len(self._project.split_at(track.id, ph))
+            msg = f"Split at {ph:.2f}s ({n} new)." if n else "Playhead isn't over this clip."
+        elif cmd == "cdel":
+            self._project.remove_clip(clip.id)
+            self._project.ui["selected"] = None
+            msg = "Deleted clip."
+        elif cmd == "cdup":
+            nid = self._project.duplicate_clip(clip.id)
+            if nid:
+                self._project.ui["selected"] = nid
+            msg = "Duplicated clip."
+        elif cmd == "cdetach":
+            if track.kind == "Video" and clip.has_audio:
+                self._project.detach_audio(clip.id)
+                msg = "Detached audio."
+            else:
+                msg = "No audio to detach."
+        else:
+            return "Unknown action."
+        upd["tl"] = self._env_after()
+        return msg
 
     def _frame_of(self, clip, which):
         """A still IMAGE for the gen keyframe slots: the source image as-is, or a
@@ -614,7 +694,8 @@ class Reel2Reel(WAN2GPPlugin):
         ins = [c["ins_label"], c["ins_gain"], c["ins_speed"], c["ins_reverse"],
                c["ins_fade_in"], c["ins_fade_out"], c["ins_opacity"], c["ins_mute"],
                c["ins_bright"], c["ins_contrast"], c["ins_sat"], c["ins_gamma"],
-               c["ins_tx"], c["ins_ty"], c["ins_scale"], c["ins_rotate"]]
+               c["ins_tx"], c["ins_ty"], c["ins_scale"], c["ins_rotate"],
+               c["ins_fit"], c["ins_crop"]]
         # Browser -> Python: persist edits + auto-populate the clip inspector.
         c["tl_to_py"].change(self._on_timeline_change, inputs=[c["tl_to_py"]],
                             outputs=ins, show_progress="hidden")
@@ -716,7 +797,7 @@ class Reel2Reel(WAN2GPPlugin):
     def _inspector_values(self):
         _, clip = self._sel()
         if clip is None:
-            return [gr.update()] * 16
+            return [gr.update()] * 18
         col = clip.color or {}
         g = clip.geometry or {}
         label = (clip.text.get("content") if clip.type == "text" and clip.text
@@ -732,7 +813,9 @@ class Reel2Reel(WAN2GPPlugin):
                 gr.update(value=str(g.get("x", "center"))),
                 gr.update(value=str(g.get("y", "center"))),
                 gr.update(value=g.get("scale", 1.0)),
-                gr.update(value=g.get("rotate", 0.0))]
+                gr.update(value=g.get("rotate", 0.0)),
+                gr.update(value=g.get("fit", "fit")),
+                gr.update(value=g.get("crop", 0.0))]
 
     @staticmethod
     def _coord(v):
@@ -746,7 +829,7 @@ class Reel2Reel(WAN2GPPlugin):
 
     # -- clip ops -----------------------------------------------------------
     def _apply_clip(self, label, gain, speed, reverse, fin, fout, opacity, mute,
-                    bright, contrast, sat, gamma, tx, ty, scale, rotate):
+                    bright, contrast, sat, gamma, tx, ty, scale, rotate, fit, crop):
         _, clip = self._sel()
         if clip is None:
             raise gr.Error("Select a clip on the timeline first.")
@@ -754,7 +837,8 @@ class Reel2Reel(WAN2GPPlugin):
         color = {"brightness": float(bright), "contrast": float(contrast),
                  "saturation": float(sat), "gamma": float(gamma)}
         geometry = {"x": self._coord(tx), "y": self._coord(ty),
-                    "scale": float(scale), "rotate": float(rotate)}
+                    "scale": float(scale), "rotate": float(rotate),
+                    "fit": fit or "fit", "crop": float(crop)}
         props = dict(label=label, gain_db=gain, speed=speed, reverse=reverse,
                      fade_in=fin, fade_out=fout, opacity=opacity, mute=mute,
                      color=color, geometry=geometry)

@@ -146,7 +146,8 @@ def _is_image(src: str) -> bool:
 def _clip_key(clip, canvas, stream, pad) -> str:
     raw = (f"{clip.src}|{clip.in_:.3f}|{clip.out:.3f}|{canvas['w']}x{canvas['h']}"
            f"@{canvas['fps']}|{canvas['ar']}|{stream}|sp{clip.speed_f:.3f}|rv{int(clip.reverse)}"
-           f"|pad{int(pad)}|col{hashlib.sha1(str(clip.color).encode()).hexdigest()[:6]}")
+           f"|pad{int(pad)}|col{hashlib.sha1(str(clip.color).encode()).hexdigest()[:6]}"
+           f"|geo{hashlib.sha1(str(clip.geometry).encode()).hexdigest()[:6]}")
     return hashlib.sha1(raw.encode()).hexdigest()[:18]
 
 
@@ -164,11 +165,22 @@ def normalize_video(clip, canvas, ffmpeg, pad=True) -> str:
     sp = effects.speed_vf(clip.speed_f, clip.reverse)
     if sp:
         vf.append(sp)
+    crop = effects.crop_vf(clip.geometry)
+    if crop:
+        vf.append(crop)
+    W, H = canvas["w"], canvas["h"]
     if pad:
-        vf.append(f"scale={canvas['w']}:{canvas['h']}:force_original_aspect_ratio=decrease")
-        vf.append(f"pad={canvas['w']}:{canvas['h']}:-1:-1:color=black")
+        fm = effects.fit_mode(clip.geometry)
+        if fm == "stretch":
+            vf.append(f"scale={W}:{H}")
+        elif fm == "fill":                       # crop-to-fit (cover, no letterbox)
+            vf.append(f"scale={W}:{H}:force_original_aspect_ratio=increase")
+            vf.append(f"crop={W}:{H}")
+        else:                                    # fit (letterbox)
+            vf.append(f"scale={W}:{H}:force_original_aspect_ratio=decrease")
+            vf.append(f"pad={W}:{H}:-1:-1:color=black")
     else:
-        vf.append(f"scale={canvas['w']}:{canvas['h']}:force_original_aspect_ratio=decrease")
+        vf.append(f"scale={W}:{H}:force_original_aspect_ratio=decrease")
     col = effects.color_vf(clip.color)
     if col:
         vf.append(col)

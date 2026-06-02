@@ -27,7 +27,7 @@
     pxPerSec: 80, snap: true, lastSeqIn: -1, mounted: false, playing: false,
     root: null, lanes: null, ruler: null, playhead: null, video: null, readout: null,
     pushTimer: null, rafId: null, lastT: 0,
-    interacting: false, pendingLoad: null,
+    interacting: false, pendingLoad: null, razor: false, ctxSeq: 0,
   };
 
   // ---- bridge ---------------------------------------------------------------
@@ -95,17 +95,30 @@
     if (!S.mounted) return;
     S.lanes.innerHTML = "";
     (S.edit.tracks || []).forEach(function (t) {
+      var collapsed = (t.height === 1);
+      var h = collapsed ? 16 : (t.height > 1 ? t.height : 52);
       var row = document.createElement("div");
       row.className = "r2r-track r2r-" + (t.kind || "Video").toLowerCase();
+      row.style.height = h + "px";
       var head = document.createElement("div");
-      head.className = "r2r-head";
+      head.className = "r2r-head"; head.style.height = h + "px";
       var flags = (t.muted ? " 🔇" : "") + (t.solo ? " ◎" : "") + (t.locked ? " 🔒" : "");
-      head.innerHTML = "<span>" + (t.name || t.id) + "</span><small>" + (t.kind) + flags + "</small>";
+      var btn = document.createElement("button");
+      btn.className = "r2r-collapse"; btn.textContent = collapsed ? "▸" : "▾";
+      btn.title = "collapse / expand track";
+      btn.addEventListener("click", function (ev) {
+        ev.stopPropagation(); t.height = collapsed ? 0 : 1; renderAll(); commit();
+      });
+      var nm = document.createElement("span"); nm.textContent = (t.name || t.id);
+      var sm = document.createElement("small"); sm.textContent = t.kind + flags;
+      head.appendChild(btn); head.appendChild(nm); head.appendChild(sm);
       var lane = document.createElement("div");
-      lane.className = "r2r-lane"; lane.dataset.track = t.id;
-      clips().filter(function (c) { return c.track === t.id; })
-        .forEach(function (c) { lane.appendChild(renderClip(c, t)); });
-      renderTransitions(lane, t);
+      lane.className = "r2r-lane"; lane.dataset.track = t.id; lane.style.height = h + "px";
+      if (!collapsed) {
+        clips().filter(function (c) { return c.track === t.id; })
+          .forEach(function (c) { lane.appendChild(renderClip(c, t)); });
+        renderTransitions(lane, t);
+      }
       row.appendChild(head); row.appendChild(lane); S.lanes.appendChild(row);
     });
     var w = Math.max(600, sec2px(totalDur()) + 200);
@@ -138,7 +151,7 @@
     // other saintorphan plugins (Replicant/ImageSuite) register their items against
     // this surface and read the clip's frame/image from data-media-src.
     el.className = "r2r-clip r2r-timeline-clip"
-      + (S.edit.ui && S.edit.ui.selected === c.id ? " sel" : "")
+      + (selection().indexOf(c.id) >= 0 ? " sel" : "")
       + (c.mute ? " muted" : "")
       + (c.type === "text" ? " r2r-text" : "");
     el.dataset.id = c.id;
@@ -240,20 +253,45 @@
   }
   function wireClip(el, c, hl, hr) {
     var mode = null, x0 = 0, start0 = 0, in0 = 0, out0 = 0, moved = false, dropTrack = null;
+    var group = null;   // {id: start0} when moving a multi-selection
     function down(e, m) {
       e.preventDefault(); e.stopPropagation();
+      if (S.razor && m === "move") {            // razor tool: click a clip to cut it there
+        var lr = el.parentNode.getBoundingClientRect();
+        var t = Math.max(0, px2sec(e.clientX - lr.left));
+        setPlayhead(t);
+        relayCtx("razor|" + c.id + "|" + t.toFixed(3));
+        return;
+      }
       mode = m; x0 = e.clientX; start0 = c.start; in0 = c.in; out0 = c.out; moved = false;
       S.interacting = true;
-      select(c.id);
+      // modifier click, or clicking a clip not already in the selection -> (re)select;
+      // a plain click on an already-selected clip keeps the group for dragging together.
+      if ((e.ctrlKey || e.metaKey || e.shiftKey) || selection().indexOf(c.id) < 0) select(c.id, e);
+      group = null;
+      var sel = selection();
+      if (m === "move" && sel.length > 1 && sel.indexOf(c.id) >= 0) {
+        group = {};
+        sel.forEach(function (id) { var cc = clipById(id); if (cc) group[id] = cc.start; });
+      }
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up, { once: true });
     }
     function move(e) {
       var ds = px2sec(e.clientX - x0); if (Math.abs(e.clientX - x0) > 2) moved = true;
       if (mode === "move") {
-        c.start = snapVal(Math.max(0, start0 + ds));
-        el.style.transform = "translateX(" + sec2px(c.start) + "px)";
-        var lane = laneAt(e.clientY); if (lane) dropTrack = lane;
+        var ns = snapVal(Math.max(0, start0 + ds));
+        var delta = ns - start0;
+        if (group) {
+          Object.keys(group).forEach(function (id) {
+            var cc = clipById(id); if (cc) cc.start = Math.max(0, group[id] + delta);
+          });
+          renderAll();
+        } else {
+          c.start = ns;
+          el.style.transform = "translateX(" + sec2px(c.start) + "px)";
+          var lane = laneAt(e.clientY); if (lane) dropTrack = lane;
+        }
       } else if (mode === "l") {
         var ni = Math.min(out0 - 1 / (S.edit.fps || 24), Math.max(0, in0 + ds));
         c.in = ni; c.start = Math.max(0, start0 + (ni - in0)); c.dur = c.out - c.in;
@@ -276,11 +314,48 @@
     hl.addEventListener("pointerdown", function (e) { down(e, "l"); });
     hr.addEventListener("pointerdown", function (e) { down(e, "r"); });
   }
-  function select(id) {
-    S.edit.ui = S.edit.ui || {}; S.edit.ui.selected = id;
+  function clipById(id) {
+    return clips().filter(function (c) { return c.id === id; })[0] || null;
+  }
+  function selection() {
+    var ui = S.edit.ui || {};
+    return ui.selection && ui.selection.length ? ui.selection
+      : (ui.selected ? [ui.selected] : []);
+  }
+  function relayCtx(v) {
+    var b = document.querySelector("#reel2reel-ctx-relay textarea, #reel2reel-ctx-relay input");
+    if (!b) return;
+    S.ctxSeq = (S.ctxSeq || 0) + 1;        // monotonic so repeats still fire .change
+    setNativeValue(b, v + "|" + S.ctxSeq);
+  }
+  function rangeSelect(aId, bId) {
+    var ordered = clips().slice().sort(function (x, y) { return x.start - y.start; });
+    var ia = ordered.findIndex(function (c) { return c.id === aId; });
+    var ib = ordered.findIndex(function (c) { return c.id === bId; });
+    if (ia < 0 || ib < 0) return [bId];
+    var lo = Math.min(ia, ib), hi = Math.max(ia, ib);
+    return ordered.slice(lo, hi + 1).map(function (c) { return c.id; });
+  }
+  function highlight() {
+    var sel = selection();
     if (S.lanes) S.lanes.querySelectorAll(".r2r-clip").forEach(function (n) {
-      n.classList.toggle("sel", n.dataset.id === id);
+      n.classList.toggle("sel", sel.indexOf(n.dataset.id) >= 0);
     });
+  }
+  function select(id, e) {
+    S.edit.ui = S.edit.ui || {};
+    var sel = (S.edit.ui.selection || []).slice();
+    if (e && (e.ctrlKey || e.metaKey)) {
+      var i = sel.indexOf(id);
+      if (i >= 0) sel.splice(i, 1); else sel.push(id);
+    } else if (e && e.shiftKey && S.edit.ui.selected) {
+      sel = rangeSelect(S.edit.ui.selected, id);
+    } else {
+      sel = [id];
+    }
+    S.edit.ui.selected = id;
+    S.edit.ui.selection = sel;
+    highlight();
   }
   function wireRuler() {
     function scrub(e) {
@@ -304,6 +379,47 @@
     S.pxPerSec = Math.max(10, Math.min(400, avail / dur));
     var z = S.root.querySelector(".r2r-zoom"); if (z) z.value = Math.round(S.pxPerSec);
     renderAll(); commit();
+  }
+  function zoomToSelection() {
+    var sel = selection();
+    if (!sel.length) return fit();
+    var lo = 1e9, hi = 0;
+    sel.forEach(function (id) {
+      var c = clipById(id);
+      if (c) { lo = Math.min(lo, c.start); hi = Math.max(hi, c.start + c.dur); }
+    });
+    if (hi <= lo) return;
+    var sc = S.root.querySelector(".r2r-scroll");
+    var avail = (sc ? sc.clientWidth : 900) - 150;
+    S.pxPerSec = Math.max(10, Math.min(400, avail / (hi - lo)));
+    var z = S.root.querySelector(".r2r-zoom"); if (z) z.value = Math.round(S.pxPerSec);
+    renderAll(); commit();
+    if (sc) sc.scrollLeft = Math.max(0, sec2px(lo) - 20);
+  }
+  function toggleRazor() {
+    S.razor = !S.razor;
+    if (S.root) S.root.classList.toggle("r2r-razor-on", S.razor);
+    var b = S.root && S.root.querySelector(".r2r-razor");
+    if (b) b.classList.toggle("active", S.razor);
+  }
+  function toggleHelp() {
+    var ex = document.getElementById("r2r-help-modal");
+    if (ex) { ex.remove(); return; }
+    var m = document.createElement("div");
+    m.id = "r2r-help-modal"; m.className = "r2r-help-modal";
+    m.innerHTML = "<div class='r2r-help-card'><h3>Reel2Reel — shortcuts</h3><ul>"
+      + "<li><b>Space</b> play/pause · <b>L / K / J</b> play / stop / jump back · <b>← →</b> step a frame</li>"
+      + "<li><b>S</b> split at playhead · <b>Del</b> delete (ripple) the selection</li>"
+      + "<li><b>Click</b> select · <b>Ctrl/⌘-click</b> add/remove · <b>Shift-click</b> range</li>"
+      + "<li><b>Ctrl/⌘ C / V / X</b> copy / paste (at playhead) / cut · drag = move (whole selection if multi)</li>"
+      + "<li>Drag a clip <b>edge</b> to trim · drag to another lane to change track</li>"
+      + "<li><b>F</b> fit · <b>Shift-Z</b> zoom to selection · <b>Ctrl/⌘-Z</b> undo · <b>Ctrl/⌘-Shift-Z</b> redo</li>"
+      + "<li>Click the time readout to jump · <b>right-click a clip</b> for actions + the saintorphan menu</li>"
+      + "</ul><button class='r2r-help-close'>Close</button></div>";
+    m.addEventListener("click", function (e) {
+      if (e.target === m || (e.target.className || "").indexOf("r2r-help-close") >= 0) m.remove();
+    });
+    document.body.appendChild(m);
   }
   function clickGr(id) {
     var b = document.querySelector("#" + id + " button") || document.querySelector("#" + id);
@@ -330,8 +446,21 @@
     var k = e.key.toLowerCase();
     if (k === " " || e.code === "Space") { e.preventDefault(); togglePlay(); }
     else if (k === "s") { e.preventDefault(); clickGr("r2r-split"); }
-    else if (k === "delete" || k === "backspace") { e.preventDefault(); clickGr("r2r-ripple"); }
+    else if (k === "delete" || k === "backspace") {
+      e.preventDefault();
+      var ds = selection();
+      if (ds.length > 1) relayCtx("delsel|" + ds.join(",")); else clickGr("r2r-ripple");
+    }
+    else if ((e.ctrlKey || e.metaKey) && k === "c") {
+      e.preventDefault(); var s = selection(); if (s.length) relayCtx("copy|" + s.join(","));
+    }
+    else if ((e.ctrlKey || e.metaKey) && k === "v") { e.preventDefault(); relayCtx("paste"); }
+    else if ((e.ctrlKey || e.metaKey) && k === "x") {
+      e.preventDefault(); var sx = selection(); if (sx.length) relayCtx("cut|" + sx.join(","));
+    }
+    else if (k === "z" && e.shiftKey && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); zoomToSelection(); }
     else if (k === "f") { e.preventDefault(); fit(); }
+    else if (k === "r" && !(e.ctrlKey || e.metaKey)) { e.preventDefault(); toggleRazor(); }
     else if (k === "l") { e.preventDefault(); play(); }
     else if (k === "k") { e.preventDefault(); stop(); commit(); }
     else if (k === "j") { e.preventDefault(); stop(); setPlayhead(ph() - 1); commit(); }
@@ -352,10 +481,12 @@
       '    <div class="r2r-transport">' +
       '      <button class="r2r-play" title="Play / pause (Space)">► / ❚❚</button>' +
       '      <span class="r2r-readout">0:00.00 / 0:00.00</span>' +
+      '      <button class="r2r-help" title="Keyboard shortcuts">?</button>' +
       '    </div>' +
       '    <label>Zoom <input type="range" class="r2r-zoom" min="10" max="400" value="80"></label>' +
       '    <div class="r2r-tools-row">' +
       '      <button class="r2r-fit" title="Zoom to fit (F)">Fit</button>' +
+      '      <button class="r2r-razor" title="Razor (R): click a clip to cut it">✂ Razor</button>' +
       '      <label class="r2r-snaplbl"><input type="checkbox" class="r2r-snap" checked> Snap</label>' +
       '    </div>' +
       '    <div class="r2r-tools-row r2r-seq">' +
@@ -381,6 +512,7 @@
     });
     wrap.querySelector(".r2r-play").addEventListener("click", togglePlay);
     wrap.querySelector(".r2r-fit").addEventListener("click", fit);
+    wrap.querySelector(".r2r-razor").addEventListener("click", toggleRazor);
     wrap.querySelector(".r2r-snap").addEventListener("change", function (e) { S.snap = e.target.checked; commit(); });
     wrap.querySelector(".r2r-fps").addEventListener("change", function (e) {
       S.edit.fps = Math.max(1, parseInt(e.target.value, 10) || 30); renderAll(); commit();
@@ -395,6 +527,21 @@
       (S.edit.clips || []).forEach(function (c) { if (c.src_fps) mx = Math.max(mx, Math.round(c.src_fps)); });
       if (mx > 0) { S.edit.fps = mx; syncSeq(); renderAll(); commit(); }
     });
+    if (S.readout) {
+      S.readout.style.cursor = "pointer";
+      S.readout.title = "click to jump to a time";
+      S.readout.addEventListener("click", function () {
+        var v = window.prompt("Jump to (seconds or M:SS):", ph().toFixed(2));
+        if (v == null) return;
+        v = v.trim();
+        var t = v.indexOf(":") >= 0
+          ? (parseFloat(v.split(":")[0]) || 0) * 60 + (parseFloat(v.split(":")[1]) || 0)
+          : parseFloat(v);
+        if (!isNaN(t)) { stop(); setPlayhead(Math.max(0, t)); commit(); }
+      });
+    }
+    var help = wrap.querySelector(".r2r-help");
+    if (help) help.addEventListener("click", toggleHelp);
     S.mounted = true; renderAll(); syncSnapBox();
   }
   function tryMount() {
