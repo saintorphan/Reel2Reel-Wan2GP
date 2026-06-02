@@ -199,6 +199,10 @@ def _render() -> dict:
                         c["mst_denoise_on"] = gr.Checkbox(label="Denoise")
                         c["mst_denoise"] = gr.Slider(0, 12, value=4, step=0.5, label="Denoise strength")
                     with gr.Group():
+                        c["mst_interp_on"] = gr.Checkbox(label="Frame interpolation (smooth motion / fps boost)")
+                        c["mst_interp_fps"] = gr.Slider(24, 120, value=60, step=1,
+                                                       label="Target fps — ffmpeg minterpolate (slow; output also conforms to Lanczos scaling)")
+                    with gr.Group():
                         c["mst_lut_on"] = gr.Checkbox(label="Apply 3D LUT (.cube)")
                         with gr.Row():
                             c["mst_lut"] = gr.UploadButton("⬆ Load .cube", size="sm",

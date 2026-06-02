@@ -169,18 +169,19 @@ def normalize_video(clip, canvas, ffmpeg, pad=True) -> str:
     if crop:
         vf.append(crop)
     W, H = canvas["w"], canvas["h"]
+    LZ = ":flags=lanczos"                         # high-quality resampling everywhere
     if pad:
         fm = effects.fit_mode(clip.geometry)
         if fm == "stretch":
-            vf.append(f"scale={W}:{H}")
+            vf.append(f"scale={W}:{H}{LZ}")
         elif fm == "fill":                       # crop-to-fit (cover, no letterbox)
-            vf.append(f"scale={W}:{H}:force_original_aspect_ratio=increase")
+            vf.append(f"scale={W}:{H}:force_original_aspect_ratio=increase{LZ}")
             vf.append(f"crop={W}:{H}")
         else:                                    # fit (letterbox)
-            vf.append(f"scale={W}:{H}:force_original_aspect_ratio=decrease")
+            vf.append(f"scale={W}:{H}:force_original_aspect_ratio=decrease{LZ}")
             vf.append(f"pad={W}:{H}:-1:-1:color=black")
     else:
-        vf.append(f"scale={W}:{H}:force_original_aspect_ratio=decrease")
+        vf.append(f"scale={W}:{H}:force_original_aspect_ratio=decrease{LZ}")
     col = effects.color_vf(clip.color)
     if col:
         vf.append(col)

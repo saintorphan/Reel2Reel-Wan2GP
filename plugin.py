@@ -1386,8 +1386,8 @@ class Reel2Reel(WAN2GPPlugin):
         # tail of _render / _preview and _pack_master.
         mst = [c["mst_color_on"], c["mst_bright"], c["mst_contrast"], c["mst_sat"],
                c["mst_temp"], c["mst_loud_on"], c["mst_lufs"], c["mst_sharpen_on"],
-               c["mst_sharpen"], c["mst_denoise_on"], c["mst_denoise"], c["mst_lut_on"],
-               c["mst_lut_path"]]
+               c["mst_sharpen"], c["mst_denoise_on"], c["mst_denoise"], c["mst_interp_on"],
+               c["mst_interp_fps"], c["mst_lut_on"], c["mst_lut_path"]]
         c["export"].click(
             self._render,
             inputs=[c["preset"], c["quality"], c["resolution"], c["range_on"],
@@ -1418,12 +1418,14 @@ class Reel2Reel(WAN2GPPlugin):
 
     @staticmethod
     def _pack_master(color_on, bright, contrast, sat, temp, loud_on, lufs,
-                     sharpen_on, sharpen, denoise_on, denoise, lut_on, lut_path):
+                     sharpen_on, sharpen, denoise_on, denoise, interp_on, interp_fps,
+                     lut_on, lut_path):
         return {"color_on": bool(color_on), "brightness": float(bright),
                 "contrast": float(contrast), "saturation": float(sat), "temp": float(temp),
                 "loud_on": bool(loud_on), "loud_lufs": float(lufs),
                 "sharpen_on": bool(sharpen_on), "sharpen": float(sharpen),
                 "denoise_on": bool(denoise_on), "denoise": float(denoise),
+                "interp_on": bool(interp_on), "interp_fps": float(interp_fps),
                 "lut_on": bool(lut_on), "lut_path": str(lut_path or "")}
 
     def _master_lut(self, f):
@@ -1444,11 +1446,12 @@ class Reel2Reel(WAN2GPPlugin):
 
     def _render(self, preset, quality, resolution, range_on, rstart, rend,
                 m_color_on, m_bright, m_contrast, m_sat, m_temp, m_loud_on, m_lufs,
-                m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_lut_on, m_lut_path,
-                progress=gr.Progress()):
+                m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_interp_on, m_interp_fps,
+                m_lut_on, m_lut_path, progress=gr.Progress()):
         self._project.master = self._pack_master(
             m_color_on, m_bright, m_contrast, m_sat, m_temp, m_loud_on, m_lufs,
-            m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_lut_on, m_lut_path)
+            m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_interp_on, m_interp_fps,
+            m_lut_on, m_lut_path)
         self._cancel_event.clear()
         w = h = None
         if resolution and "x" in str(resolution).lower():
@@ -1476,13 +1479,14 @@ class Reel2Reel(WAN2GPPlugin):
         return "Cancelling render…"
 
     def _preview(self, secs, m_color_on, m_bright, m_contrast, m_sat, m_temp, m_loud_on,
-                 m_lufs, m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_lut_on,
-                 m_lut_path, progress=gr.Progress()):
+                 m_lufs, m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_interp_on,
+                 m_interp_fps, m_lut_on, m_lut_path, progress=gr.Progress()):
         """A true low-res composite of a window at the playhead (the real cut) — WITH
         the master finish stage, so you see the final look before committing."""
         self._project.master = self._pack_master(
             m_color_on, m_bright, m_contrast, m_sat, m_temp, m_loud_on, m_lufs,
-            m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_lut_on, m_lut_path)
+            m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_interp_on, m_interp_fps,
+            m_lut_on, m_lut_path)
         self._cancel_event.clear()
         ph = float((self._project.ui or {}).get("playhead", 0.0))
         secs = float(secs or 8)

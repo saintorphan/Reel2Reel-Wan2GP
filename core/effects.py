@@ -80,6 +80,9 @@ def master_vf(master: dict | None) -> str:
         a = _clamp(master.get("sharpen", 0.8), 0.0, 2.0, 0.8)
         if a > 0.02:
             parts.append(f"unsharp=5:5:{a:.3f}:5:5:0.0")
+    if master.get("interp_on"):     # ffmpeg motion interpolation (RIFE = separate pass)
+        f = int(_clamp(master.get("interp_fps", 60), 24, 120, 60))
+        parts.append(f"minterpolate=fps={f}:mi_mode=mci:mc_mode=aobmc:vsbmc=1")
     return ",".join(parts)
 
 
