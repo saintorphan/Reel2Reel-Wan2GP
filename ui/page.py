@@ -214,6 +214,14 @@ def _render() -> dict:
                                                           file_types=[".cube"], file_count="single")
                             c["mst_lut_name"] = gr.Markdown("*no LUT loaded*")
                         c["mst_lut_path"] = gr.State("")
+                    with gr.Group():
+                        gr.Markdown("**Consistency** — even out per-clip grades so the "
+                                    "master doesn't over-process some shots")
+                        with gr.Row():
+                            c["mst_check"] = gr.Button("🔍 Check", scale=0)
+                            c["mst_match_all"] = gr.Button("Apply selected grade to all", scale=1)
+                            c["mst_clear_all"] = gr.Button("Clear all clip grades", scale=1)
+                        c["mst_status"] = gr.Markdown("")
                 with gr.Group():
                     c["range_on"] = gr.Checkbox(label="Export range only")
                     with gr.Row(elem_classes="r2r-range-row"):

@@ -1398,6 +1398,13 @@ class Reel2Reel(WAN2GPPlugin):
                           outputs=[c["video"], c["log"]])
         c["mst_lut"].upload(self._master_lut, inputs=[c["mst_lut"]],
                            outputs=[c["mst_lut_path"], c["mst_lut_name"]])
+        # consistency guardrails
+        c["mst_check"].click(self._finish_check, inputs=[c["mst_color_on"]],
+                            outputs=[c["mst_status"]])
+        c["mst_match_all"].click(self._match_all_grades,
+                                outputs=[self.tl_from_py, c["mst_status"]])
+        c["mst_clear_all"].click(self._clear_all_grades,
+                                outputs=[self.tl_from_py, c["mst_status"]])
         # The final cut is a VIDEO, so send it to the Video Generator as a Vid2Vid
         # source — the same host path the clip menu's "Send to Vid2Vid" uses
         # (get_current_model_settings + a form-refresh trigger + tab switch).
@@ -1444,6 +1451,68 @@ class Reel2Reel(WAN2GPPlugin):
             path = src
         return path, f"LUT: **{Path(path).name}**"
 
+    # -- finish / consistency guardrails ------------------------------------
+    @staticmethod
+    def _is_graded(col):
+        if not col:
+            return False
+        return (abs(col.get("brightness", 0) or 0) > 1e-3
+                or abs((col.get("contrast", 1) or 1) - 1) > 1e-3
+                or abs((col.get("saturation", 1) or 1) - 1) > 1e-3
+                or abs((col.get("gamma", 1) or 1) - 1) > 1e-3
+                or abs(col.get("temp", 0) or 0) > 1e-3
+                or abs(col.get("tint", 0) or 0) > 1e-3)
+
+    def _graded_clips(self):
+        out = []
+        for t in self._project.tracks:
+            if t.kind != "Video":
+                continue
+            for cl in t.clips:
+                if cl.type != "text" and cl.src and self._is_graded(cl.color):
+                    out.append(cl)
+        return out
+
+    def _finish_check(self, master_color_on):
+        graded = self._graded_clips()
+        notes = []
+        if master_color_on and graded:
+            notes.append(f"⚠ Master grade **+** {len(graded)} per-clip grade(s) — these "
+                         "**stack** (clamped, but consider clearing one of them).")
+        if len(graded) >= 2:
+            sats = [float(c.color.get("saturation", 1.0)) for c in graded]
+            brs = [float(c.color.get("brightness", 0.0)) for c in graded]
+            if (max(sats) - min(sats) > 0.5) or (max(brs) - min(brs) > 0.25):
+                notes.append("⚠ Per-clip grades vary a lot across the cut — "
+                             "**Apply selected grade to all** to even them out.")
+        if not notes:
+            notes.append("✅ Finish looks consistent.")
+        return "  \n".join(notes)
+
+    def _match_all_grades(self):
+        _, clip = self._sel()
+        if clip is None:
+            raise gr.Error("Select the reference clip on the timeline first.")
+        ref = dict(clip.color or {})
+        self._push_undo()
+        n = 0
+        for t in self._project.tracks:
+            if t.kind != "Video":
+                continue
+            for cl in t.clips:
+                if cl.type != "text" and cl.src:
+                    cl.color = dict(ref); n += 1
+        return self._env_after(), f"Applied **{clip.label or clip.id}**'s grade to {n} clip(s)."
+
+    def _clear_all_grades(self):
+        self._push_undo()
+        n = 0
+        for t in self._project.tracks:
+            for cl in t.clips:
+                if self._is_graded(cl.color):
+                    cl.color = {}; n += 1
+        return self._env_after(), f"Cleared per-clip grades on {n} clip(s)."
+
     def _render(self, preset, quality, resolution, range_on, rstart, rend,
                 m_color_on, m_bright, m_contrast, m_sat, m_temp, m_loud_on, m_lufs,
                 m_sharpen_on, m_sharpen, m_denoise_on, m_denoise, m_interp_mode, m_interp_fps,
@@ -1460,6 +1529,9 @@ class Reel2Reel(WAN2GPPlugin):
         if mode in ("rife2", "rife4") and not use_rife:
             master["interp"] = "minterpolate"
         self._project.master = master
+        if master.get("color_on") and self._graded_clips():
+            gr.Warning("Master grade stacks on per-clip grades — check the Finish → "
+                       "Consistency panel if the result looks over-processed.")
         self._cancel_event.clear()
         w = h = None
         if resolution and "x" in str(resolution).lower():

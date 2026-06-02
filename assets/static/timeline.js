@@ -282,6 +282,14 @@
     return null;
   }
 
+  function isGraded(c) {
+    var k = c && c.color; if (!k) return false;
+    return Math.abs(k.brightness || 0) > 1e-3
+      || Math.abs((k.contrast == null ? 1 : k.contrast) - 1) > 1e-3
+      || Math.abs((k.saturation == null ? 1 : k.saturation) - 1) > 1e-3
+      || Math.abs((k.gamma == null ? 1 : k.gamma) - 1) > 1e-3
+      || Math.abs(k.temp || 0) > 1e-3 || Math.abs(k.tint || 0) > 1e-3;
+  }
   function renderClip(c, t) {
     var el = document.createElement("div");
     // r2r-timeline-clip + data-media-src are the shared SaintorphanMenu convention:
@@ -310,6 +318,11 @@
     lbl.textContent = (c.label || c.id) + (c.mute ? " 🔇" : "")
       + (c.opacity != null && c.opacity < 0.999 ? "  " + Math.round(c.opacity * 100) + "%" : "");
     el.appendChild(lbl);
+    if (isGraded(c)) {                                  // visible "this clip is graded" badge
+      var g = document.createElement("span");
+      g.className = "r2r-graded"; g.textContent = "◐"; g.title = "Colour-graded clip";
+      el.appendChild(g);
+    }
     if (c.fade_in > 0.001) el.appendChild(fadeTri("l", sec2px(c.fade_in)));
     if (c.fade_out > 0.001) el.appendChild(fadeTri("r", sec2px(c.fade_out)));
     var hl = document.createElement("div"); hl.className = "r2r-handle l";

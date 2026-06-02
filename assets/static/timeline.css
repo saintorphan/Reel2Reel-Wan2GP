@@ -148,6 +148,10 @@
   pointer-events: none;
 }
 .r2r-tl .r2r-audio .r2r-label { color: #eafff7; text-shadow: 0 1px 1px #000; }
+.r2r-tl .r2r-graded {
+  position: absolute; top: 2px; right: 4px; font-size: 12px; line-height: 1;
+  color: #1a1405; text-shadow: 0 0 2px var(--r2r-amber); pointer-events: none; z-index: 2;
+}
 .r2r-tl .r2r-handle {
   position: absolute; top: 0; width: 7px; height: 100%;
   cursor: ew-resize; background: rgba(0,0,0,0.18);
