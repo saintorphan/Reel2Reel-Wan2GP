@@ -151,6 +151,53 @@ def list_projects() -> list[str]:
 
 # --- lifecycle --------------------------------------------------------------
 
+def autosave_path() -> Path:
+    return cache_dir() / "autosave.r2r.json"
+
+
+def _dir_bytes(d: Path) -> int:
+    total = 0
+    if d and Path(d).is_dir():
+        for p in Path(d).rglob("*"):
+            try:
+                if p.is_file():
+                    total += p.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def cache_bytes() -> int:
+    """Bytes used by the thumbnail + normalized-clip caches (safe to delete)."""
+    return _dir_bytes(thumbs_dir()) + _dir_bytes(norm_dir())
+
+
+def renders_bytes() -> int:
+    return _dir_bytes(renders_dir())
+
+
+def clear_cache(include_renders: bool = False) -> int:
+    """Wipe the thumbs + norm caches (and optionally renders). Returns bytes freed."""
+    import shutil
+    freed = cache_bytes() + (renders_bytes() if include_renders else 0)
+    targets = [thumbs_dir(), norm_dir()]
+    if include_renders:
+        targets.append(renders_dir())
+    for d in targets:
+        shutil.rmtree(d, ignore_errors=True)
+        d.mkdir(parents=True, exist_ok=True)
+    return freed
+
+
+def human_size(n: int) -> str:
+    n = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.1f} {unit}"
+        n /= 1024.0
+    return f"{n:.1f} TB"
+
+
 def ensure_dirs() -> Path:
     """Create the plugin's own directory tree if missing. Idempotent; called on
     plugin setup. Never touches the (read-only) Wan2GP outputs dir."""

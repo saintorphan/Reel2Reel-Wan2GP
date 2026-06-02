@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -144,6 +145,7 @@ class Reel2Reel(WAN2GPPlugin):
         self._bin_view: list[dict] = []
         self._gbin_view: list[dict] = []
         self._ctx_out: list[str] = []      # context-menu relay output order
+        self._cancel_event = threading.Event()
 
     # -- lifecycle ----------------------------------------------------------
     def setup_ui(self):
@@ -665,6 +667,8 @@ class Reel2Reel(WAN2GPPlugin):
                       outputs=[c["proj_dd"], c["status"]])
         c["delete"].click(self._delete_project, inputs=[c["proj_dd"]],
                          outputs=[c["proj_dd"], c["current_lbl"], c["status"]])
+        c["restore_auto"].click(self._restore_autosave,
+                               outputs=[self.tl_from_py, self.trk_dd, c["status"]])
         # Versions (manual named snapshots)
         c["snapshot"].click(self._snapshot, inputs=[c["ver_label"]],
                            outputs=[c["ver_dd"], c["ver_label"], c["status"]])
@@ -689,6 +693,10 @@ class Reel2Reel(WAN2GPPlugin):
             self._redo.clear()
             self._last_sig = new_sig
         self._project = new
+        try:                                            # crash-recovery autosave
+            timeline.save(paths.autosave_path(), self._project)
+        except Exception:
+            pass
         return self._inspector_values()
 
     def _sel(self):
@@ -875,6 +883,19 @@ class Reel2Reel(WAN2GPPlugin):
         self._switch_to(name, tl)
         return self._proj_io(f"Opened **{name}**.")
 
+    def _restore_autosave(self):
+        p = paths.autosave_path()
+        if not p.exists():
+            return self._load_envelope(), gr.update(), "No autosave found."
+        try:
+            self._push_undo()
+            self._project = timeline.load(p)
+            self._last_sig = self._content_sig()
+        except Exception as e:
+            raise gr.Error(f"Could not restore autosave: {e}")
+        return (self._env_after(), gr.update(choices=self._track_choices()),
+                "Restored from autosave.")
+
     def _new_project(self, name):
         name = (name or "").strip()
         if not name:
@@ -974,7 +995,12 @@ class Reel2Reel(WAN2GPPlugin):
 
     # -- render -------------------------------------------------------------
     def _wire_render(self, c):
-        c["export"].click(self._render, outputs=[c["video"], c["save_as"], c["log"]])
+        c["export"].click(
+            self._render,
+            inputs=[c["preset"], c["quality"], c["resolution"], c["range_on"],
+                    c["range_start"], c["range_end"]],
+            outputs=[c["video"], c["save_as"], c["log"]])
+        c["cancel"].click(self._cancel_render, outputs=[c["log"]])
         targets = [(n, getattr(self, n, None)) for n in
                    ("image_start", "image_prompt_type_radio", "image_start_row", "main_tabs")]
         self._i2v_targets = [n for n, comp in targets if comp is not None]
@@ -986,9 +1012,22 @@ class Reel2Reel(WAN2GPPlugin):
         else:
             c["to_i2v"].click(self._img2vid_unavailable, outputs=[c["log"]])
 
-    def _render(self, progress=gr.Progress()):
+    def _render(self, preset, quality, resolution, range_on, rstart, rend,
+                progress=gr.Progress()):
+        self._cancel_event.clear()
+        w = h = None
+        if resolution and "x" in str(resolution).lower():
+            try:
+                w, h = (int(x) for x in str(resolution).lower().split("x")[:2])
+            except Exception:
+                w = h = None
+        start = float(rstart) if (range_on and rstart) else None
+        end = float(rend) if (range_on and rend and float(rend) > 0) else None
         try:
-            out = render.export(self._project, progress_cb=lambda f, d: progress(f, desc=d))
+            out = render.export(self._project, preset=preset or "mp4",
+                                quality=quality or "high", width=w, height=h,
+                                start=start, end=end, cancel=self._cancel_event,
+                                progress_cb=lambda f, d: progress(f, desc=d))
         except render.RenderError as e:
             return gr.update(), gr.update(), f"❌ {e}"
         except Exception as e:
@@ -996,6 +1035,10 @@ class Reel2Reel(WAN2GPPlugin):
             return gr.update(), gr.update(), f"❌ Render failed: {e}"
         self._last_render = out
         return out, gr.update(value=out), f"✅ Rendered `{out}`"
+
+    def _cancel_render(self):
+        self._cancel_event.set()
+        return "Cancelling render…"
 
     def _send_to_img2vid(self):
         names = getattr(self, "_i2v_targets", [])
@@ -1059,6 +1102,12 @@ class Reel2Reel(WAN2GPPlugin):
             outputs=[s["dirs_status"], pages["library"]["gallery"], s["ffmpeg_status"]])
         s["rescan"].click(self._refresh_library,
                          outputs=[pages["library"]["gallery"], pages["library"]["status"]])
+
+        def _clear(also_renders):
+            freed = paths.clear_cache(include_renders=bool(also_renders))
+            return settings_panel.cache_md(), f"🧹 Freed {paths.human_size(freed)}."
+        s["clear_cache"].click(_clear, inputs=[s["clear_renders"]],
+                              outputs=[s["cache_status"], s["dirs_status"]])
 
 
 # The plugin loader looks for any WAN2GPPlugin subclass; expose a stable alias too.

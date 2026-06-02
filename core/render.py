@@ -82,13 +82,36 @@ def _font() -> str | None:
     return next((f for f in _FONT_CANDIDATES if Path(f).exists()), None)
 
 
-def run(args: list[str], timeout: int = 3600) -> str:
-    proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+def run(args: list[str], timeout: int = 3600, cancel=None) -> str:
+    if cancel is None:
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+        if proc.returncode != 0:
+            tail = "\n".join((proc.stderr or "").strip().splitlines()[-24:])
+            logger.error("ffmpeg failed (%d): %s", proc.returncode, tail)
+            raise RenderError(f"ffmpeg exited {proc.returncode}:\n{tail}")
+        return proc.stdout or ""
+    # Cancelable path: Popen + poll the cancel event, terminate the subprocess.
+    import time as _t
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    started = _t.monotonic()
+    while proc.poll() is None:
+        if cancel.is_set():
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+            raise RenderError("Render cancelled.")
+        if _t.monotonic() - started > timeout:
+            proc.kill()
+            raise RenderError("Render timed out.")
+        _t.sleep(0.25)
+    out, err = proc.communicate()
     if proc.returncode != 0:
-        tail = "\n".join((proc.stderr or "").strip().splitlines()[-24:])
+        tail = "\n".join((err or "").strip().splitlines()[-24:])
         logger.error("ffmpeg failed (%d): %s", proc.returncode, tail)
         raise RenderError(f"ffmpeg exited {proc.returncode}:\n{tail}")
-    return proc.stdout or ""
+    return out or ""
 
 
 def ffprobe_dur(path: str) -> float | None:
@@ -194,10 +217,14 @@ def _gain(db: float) -> float:
 
 
 def export(tl, out_path=None, preset="mp4", quality="high", width=None, height=None,
-           fps=None, start=None, end=None, progress_cb=None) -> str:
+           fps=None, start=None, end=None, progress_cb=None, cancel=None) -> str:
     ffmpeg = ffmpeg_path()
     if not ffmpeg:
         raise RenderError("ffmpeg not found. Install ffmpeg or set REEL2REEL_FFMPEG.")
+
+    def _ck():
+        if cancel is not None and cancel.is_set():
+            raise RenderError("Render cancelled.")
     tl.sanitize()
     canvas = canvas_of(tl, width, height, fps)
     total = tl.total_duration()
@@ -246,12 +273,15 @@ def export(tl, out_path=None, preset="mp4", quality="high", width=None, height=N
     work = len(fold) + len(pip) + len(audio_src)
     done = 0
     for t, c in fold:
+        _ck()
         norm_v[c.id] = normalize_video(c, canvas, ffmpeg, pad=True)
         done += 1; _prog(0.05 + 0.5 * done / max(1, work), f"Normalizing {done}/{work}")
     for t, c in pip:
+        _ck()
         norm_v[c.id] = normalize_video(c, canvas, ffmpeg, pad=False)
         done += 1; _prog(0.05 + 0.5 * done / max(1, work), f"Normalizing {done}/{work}")
     for c, t in audio_src:
+        _ck()
         norm_a[c.id] = normalize_audio(c, canvas, ffmpeg)
         done += 1; _prog(0.05 + 0.5 * done / max(1, work), f"Normalizing {done}/{work}")
 
@@ -392,8 +422,9 @@ def export(tl, out_path=None, preset="mp4", quality="high", width=None, height=N
     rdur = max(1.0 / FPS, r1 - r0)
 
     _prog(0.7, "Encoding")
+    _ck()
     if preset == "gif":
-        _encode_gif(ffmpeg, inputs, filt, out_path, r0, rdur, FPS, W)
+        _encode_gif(ffmpeg, inputs, filt, out_path, r0, rdur, FPS, W, cancel)
     else:
         full = filt + afilt
         graph = paths.norm_dir() / f"graph_{hashlib.sha1(';'.join(full).encode()).hexdigest()[:12]}.txt"
@@ -407,7 +438,7 @@ def export(tl, out_path=None, preset="mp4", quality="high", width=None, height=N
         if preset in ("mp4",):
             args += ["-crf", str(crf)]
         args += ["-pix_fmt", PIX, *p["a"], *p["extra"], out_path]
-        run(args)
+        run(args, cancel=cancel)
     _prog(1.0, "Done")
     return out_path
 
@@ -428,7 +459,7 @@ def _augment_overlap_fades(audio_src):
                 b.fade_in = max(b.fade_in, d)
 
 
-def _encode_gif(ffmpeg, inputs, filt, out_path, r0, rdur, fps, W):
+def _encode_gif(ffmpeg, inputs, filt, out_path, r0, rdur, fps, W, cancel=None):
     gfps = min(fps, 15)
     scale = min(W, 640)
     filt = list(filt) + [f"[vout]fps={gfps},scale={scale}:-1:flags=lanczos,split[gv1][gv2]",
@@ -440,7 +471,7 @@ def _encode_gif(ffmpeg, inputs, filt, out_path, r0, rdur, fps, W):
     if r0 > 0.001:
         args += ["-ss", f"{r0:.3f}"]
     args += ["-t", f"{rdur:.3f}", out_path]
-    run(args)
+    run(args, cancel=cancel)
 
 
 def _default_out(tl, ext=".mp4") -> str:

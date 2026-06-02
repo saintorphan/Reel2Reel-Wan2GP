@@ -130,6 +130,7 @@ def _timeline() -> dict:
             c["saveas"] = gr.Button("Save as")
             c["rename"] = gr.Button("Rename")
             c["dup"] = gr.Button("Duplicate")
+            c["restore_auto"] = gr.Button("↺ Restore autosave")
         gr.Markdown("**Versions** — manual named snapshots")
         with gr.Row():
             c["ver_label"] = gr.Textbox(label="Snapshot name", scale=2)
@@ -145,12 +146,25 @@ def _timeline() -> dict:
 def _render() -> dict:
     c = {"mode": "render"}
     gr.Markdown("### Render\n"
-                "Composite the timeline to an mp4 with ffmpeg (normalize → "
-                "overlay-onto-canvas → mux). Hard cuts + gaps render today; "
-                "cross-dissolves are a deferred milestone.")
+                "Composite the timeline with ffmpeg (transitions, fades, speed, "
+                "color, titles, PiP). Pick a format and quality; export the whole "
+                "timeline or a range.")
     with gr.Row():
-        c["export"] = gr.Button("🎬 Export mp4", variant="primary",
+        c["preset"] = gr.Dropdown(["mp4", "webm", "prores", "gif"], value="mp4",
+                                 label="Format", scale=1)
+        c["quality"] = gr.Dropdown(["high", "medium", "low"], value="high",
+                                  label="Quality", scale=1)
+        c["resolution"] = gr.Dropdown(
+            ["timeline", "1920x1080", "1280x720", "1080x1080", "720x1280", "854x480"],
+            value="timeline", label="Resolution", scale=1)
+    with gr.Row():
+        c["range_on"] = gr.Checkbox(label="Export range only", scale=0)
+        c["range_start"] = gr.Number(label="Start (s)", value=0, scale=1)
+        c["range_end"] = gr.Number(label="End (s)", value=0, scale=1)
+    with gr.Row():
+        c["export"] = gr.Button("🎬 Export", variant="primary",
                                elem_classes="reel2reel-prim", scale=1)
+        c["cancel"] = gr.Button("✖ Cancel", scale=0)
         c["to_i2v"] = gr.Button("→ Send final cut to Img2Vid", scale=1)
     c["video"] = gr.Video(label="Rendered cut", height=420, interactive=False)
     c["save_as"] = gr.DownloadButton("Save As…", size="sm")

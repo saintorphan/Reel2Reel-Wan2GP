@@ -30,9 +30,21 @@ def build_settings_panel() -> dict:
             c["rescan"] = gr.Button("Rescan library")
         c["dirs_status"] = gr.Markdown("")
 
+        gr.Markdown("### Cache")
+        c["cache_status"] = gr.Markdown(cache_md())
+        with gr.Row():
+            c["clear_renders"] = gr.Checkbox(label="also delete rendered mp4s", value=False)
+            c["clear_cache"] = gr.Button("🧹 Clear cache")
+
         gr.Markdown("### ffmpeg")
         c["ffmpeg_status"] = gr.Markdown(ffmpeg_md())
     return c
+
+
+def cache_md() -> str:
+    cb, rb = paths.cache_bytes(), paths.renders_bytes()
+    return (f"Thumbnails + normalized clips: **{paths.human_size(cb)}** · "
+            f"Renders: **{paths.human_size(rb)}** (safe to delete; regenerated on demand)")
 
 
 def ffmpeg_md() -> str:
