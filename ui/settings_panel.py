@@ -1,0 +1,45 @@
+"""Settings sub-tab: directory roots + ffmpeg status.
+
+Components only; plugin.py wires Save/Rescan (it owns paths + the library/project
+refresh). Directories persist to ``<wan2gp_root>/.reel2reel.json``.
+"""
+from __future__ import annotations
+
+import gradio as gr
+
+from ..core import paths, render
+
+
+def build_settings_panel() -> dict:
+    c = {}
+    with gr.Column():
+        gr.Markdown("### Directories\n"
+                    "Where Reel2Reel keeps projects and renders, and where it "
+                    "imports clips from. Repoint any of them; saved to "
+                    "`<wan2gp_root>/.reel2reel.json`.")
+        c["projects_dir"] = gr.Textbox(label="Projects dir (saved timelines)",
+                                       value=str(paths.projects_dir()))
+        c["renders_dir"] = gr.Textbox(label="Renders dir (exported mp4)",
+                                      value=str(paths.renders_dir()))
+        c["wan2gp_outputs_dir"] = gr.Textbox(
+            label="Import-from dir (Wan2GP outputs — read-only source)",
+            value=str(paths.wan2gp_outputs_dir()))
+        with gr.Row():
+            c["save_dirs"] = gr.Button("Save directories", variant="primary",
+                                      elem_classes="reel2reel-prim")
+            c["rescan"] = gr.Button("Rescan library")
+        c["dirs_status"] = gr.Markdown("")
+
+        gr.Markdown("### ffmpeg")
+        c["ffmpeg_status"] = gr.Markdown(ffmpeg_md())
+    return c
+
+
+def ffmpeg_md() -> str:
+    st = render.ffmpeg_status()
+    if not st["present"]:
+        return ("⚠️ **ffmpeg not found.** Install it (`apt install ffmpeg`) or set "
+                "`REEL2REEL_FFMPEG=/path/to/ffmpeg`. Rendering is disabled until then.")
+    probe = f" · ffprobe `{st['ffprobe']}`" if st["ffprobe"] else " · ffprobe missing (probing degraded)"
+    ver = st["version"] or "ffmpeg"
+    return f"✅ `{st['path']}`{probe}\n\n`{ver}`"

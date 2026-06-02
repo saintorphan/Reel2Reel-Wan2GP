@@ -1,0 +1,88 @@
+/* Reel2Reel timeline — scoped under .r2r-tl so it never leaks into Gradio.
+   Injected as a <style> blob by ui/timeline_widget.py. Amber on charcoal. */
+
+.r2r-tl {
+  --r2r-amber: #e0a106;
+  --r2r-amber-dk: #b07d00;
+  --r2r-bg: #15161a;
+  --r2r-lane: #1f2128;
+  --r2r-edge: #33363f;
+  color: #e9e6df;
+  font-size: 12px;
+  user-select: none;
+}
+
+.r2r-tl .r2r-toolbar {
+  display: flex; gap: 14px; align-items: flex-start;
+  margin-bottom: 8px;
+}
+.r2r-tl .r2r-preview {
+  width: 320px; max-width: 45%; height: 180px; background: #000;
+  border: 1px solid var(--r2r-edge); border-radius: 8px;
+}
+.r2r-tl .r2r-tools { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+.r2r-tl .r2r-tools label { display: flex; gap: 8px; align-items: center; }
+.r2r-tl .r2r-zoom { accent-color: var(--r2r-amber); }
+
+.r2r-tl .r2r-scroll {
+  position: relative; overflow-x: auto; overflow-y: hidden;
+  background: var(--r2r-bg); border: 1px solid var(--r2r-edge);
+  border-radius: 8px; padding: 0 0 8px 0;
+}
+
+.r2r-tl .r2r-ruler {
+  position: relative; height: 22px; min-width: 600px;
+  border-bottom: 1px solid var(--r2r-edge);
+  margin-left: 96px; cursor: text;
+}
+.r2r-tl .r2r-tick {
+  position: absolute; top: 0; height: 22px;
+  border-left: 1px solid var(--r2r-edge);
+  padding-left: 3px; color: #8b8f99; font-size: 10px; line-height: 22px;
+}
+
+.r2r-tl .r2r-lanes { position: relative; }
+.r2r-tl .r2r-track { display: flex; align-items: stretch; height: 52px; }
+.r2r-tl .r2r-head {
+  width: 96px; min-width: 96px; display: flex; align-items: center;
+  padding: 0 8px; color: #c9c6bf; background: #1a1c22;
+  border-right: 1px solid var(--r2r-edge); border-bottom: 1px solid var(--r2r-edge);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.r2r-tl .r2r-lane {
+  position: relative; flex: 1; height: 52px;
+  background: var(--r2r-lane); border-bottom: 1px solid var(--r2r-edge);
+}
+.r2r-tl .r2r-audio .r2r-lane { background: #19211f; }
+
+.r2r-tl .r2r-clip {
+  position: absolute; top: 5px; height: 42px; box-sizing: border-box;
+  background: var(--r2r-amber); background-size: cover; background-position: center;
+  border: 1px solid var(--r2r-amber-dk); border-radius: 5px;
+  overflow: hidden; cursor: grab; touch-action: none;
+  box-shadow: inset 0 0 0 100px rgba(20,16,4,0.18);
+}
+.r2r-tl .r2r-audio .r2r-clip {
+  background: #2f6f5e; border-color: #1d4c40;
+  box-shadow: none;
+}
+.r2r-tl .r2r-clip.sel { outline: 2px solid #fff; z-index: 3; }
+.r2r-tl .r2r-label {
+  position: absolute; left: 6px; bottom: 3px; right: 6px;
+  font-size: 11px; color: #1a1405; font-weight: 600;
+  text-shadow: 0 1px 0 rgba(255,255,255,0.25);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+}
+.r2r-tl .r2r-audio .r2r-label { color: #eafff7; text-shadow: 0 1px 1px #000; }
+.r2r-tl .r2r-handle {
+  position: absolute; top: 0; width: 7px; height: 100%;
+  cursor: ew-resize; background: rgba(0,0,0,0.18);
+}
+.r2r-tl .r2r-handle.l { left: 0; }
+.r2r-tl .r2r-handle.r { right: 0; }
+
+.r2r-tl .r2r-playhead {
+  position: absolute; top: 0; left: 96px; width: 2px; height: 100%;
+  background: #ff3b3b; pointer-events: none; z-index: 4;
+}

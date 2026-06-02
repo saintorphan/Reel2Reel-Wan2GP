@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Generated data + local config
+reel2reel/
+.reel2reel.json
+
+# Rendered / cached media
+*.mp4
+*.mov
+*.m4a
+!assets/**
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
