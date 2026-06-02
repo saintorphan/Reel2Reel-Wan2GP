@@ -107,11 +107,26 @@ _CTX_MENU_JS = (
     "})()\">")
 
 
+_COMMON_FPS = [8, 12, 15, 16, 24, 25, 30, 48, 50, 60]
+
+
+def _snap_fps(f) -> int:
+    """Snap a probed frame rate to the nearest common rate (23.976->24, 29.97->30)."""
+    try:
+        f = float(f)
+    except (TypeError, ValueError):
+        return 30
+    for c in _COMMON_FPS:
+        if abs(f - c) <= 0.6:
+            return c
+    return max(1, round(f))
+
+
 class Reel2Reel(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
         self.name = PLUGIN_NAME
-        self.version = "0.3.1"
+        self.version = "0.3.2"
         self.description = ("Multi-track timeline editor: arrange AI clips on "
                             "video/audio tracks, detach/edit audio, transitions, "
                             "projects with versioning, a media library, a shared "
@@ -319,6 +334,15 @@ class Reel2Reel(WAN2GPPlugin):
         k = discovery.kind_of(path) or "video"
         track_kind = "Audio" if (k == "audio" or force_kind == "Audio") else "Video"
         info = discovery.probe_clip(path, getattr(self, "get_video_info", None))
+        # First clip on an empty timeline adopts its fps + resolution (then it's the
+        # locked sequence timebase; later clips conform on export). Override via the
+        # timeline's FPS / size fields or "Match highest fps".
+        if not any(t.clips for t in self._project.tracks):
+            if info.get("fps"):
+                self._project.fps = _snap_fps(info["fps"])
+            if info.get("width") and info.get("height"):
+                self._project.width = int(info["width"])
+                self._project.height = int(info["height"])
         dur = info.get("dur") or 5.0
         clip = self._project.append_clip(
             path, kind=track_kind, in_=0.0, out=float(dur), src_dur=info.get("dur"),

@@ -99,7 +99,7 @@
     });
     var w = Math.max(600, sec2px(totalDur()) + 200);
     S.ruler.style.width = w + "px";
-    drawRuler(); placePlayhead(); driveVideo(); updateReadout();
+    drawRuler(); placePlayhead(); driveVideo(); updateReadout(); syncSeq();
   }
 
   function renderClip(c, t) {
@@ -258,6 +258,13 @@
     if (b) b.click();
   }
   function syncSnapBox() { var s = S.root && S.root.querySelector(".r2r-snap"); if (s) s.checked = S.snap; }
+  function syncSeq() {
+    if (!S.root) return;
+    var f = S.root.querySelector(".r2r-fps");
+    if (f && document.activeElement !== f) f.value = Math.round(S.edit.fps || 30);
+    var r = S.root.querySelector(".r2r-res");
+    if (r && document.activeElement !== r) r.value = (S.edit.width || 1280) + "x" + (S.edit.height || 720);
+  }
   function typingInField() {
     var a = document.activeElement;
     return a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" || a.isContentEditable);
@@ -294,7 +301,12 @@
       '      <button class="r2r-fit" title="Zoom to fit (F)">Fit</button>' +
       '      <label class="r2r-snaplbl"><input type="checkbox" class="r2r-snap" checked> Snap</label>' +
       '    </div>' +
-      '    <small class="r2r-hint">Drag = move · edge = trim · ruler = scrub · S split · Del ripple · ⌘Z undo</small>' +
+      '    <div class="r2r-tools-row r2r-seq">' +
+      '      <label>FPS <input type="number" class="r2r-fps" min="1" max="120" step="1"></label>' +
+      '      <label>Size <input class="r2r-res" size="9" placeholder="1280x720"></label>' +
+      '      <button class="r2r-matchfps" title="Set the timeline fps to the highest source-clip fps">Match fps</button>' +
+      '    </div>' +
+      '    <small class="r2r-hint">Drag = move · edge = trim · ruler = scrub · S split · Del ripple · ⌘Z undo. Clips conform to the timeline FPS/size on export.</small>' +
       '  </div>' +
       '</div>' +
       '<div class="r2r-scroll"><div class="r2r-ruler"></div><div class="r2r-lanes"></div>' +
@@ -313,6 +325,19 @@
     wrap.querySelector(".r2r-play").addEventListener("click", togglePlay);
     wrap.querySelector(".r2r-fit").addEventListener("click", fit);
     wrap.querySelector(".r2r-snap").addEventListener("change", function (e) { S.snap = e.target.checked; commit(); });
+    wrap.querySelector(".r2r-fps").addEventListener("change", function (e) {
+      S.edit.fps = Math.max(1, parseInt(e.target.value, 10) || 30); renderAll(); commit();
+    });
+    wrap.querySelector(".r2r-res").addEventListener("change", function (e) {
+      var m = /(\d+)\s*[x×]\s*(\d+)/.exec(e.target.value || "");
+      if (m) { S.edit.width = +m[1]; S.edit.height = +m[2]; commit(); }
+      syncSeq();
+    });
+    wrap.querySelector(".r2r-matchfps").addEventListener("click", function () {
+      var mx = 0;
+      (S.edit.clips || []).forEach(function (c) { if (c.src_fps) mx = Math.max(mx, Math.round(c.src_fps)); });
+      if (mx > 0) { S.edit.fps = mx; syncSeq(); renderAll(); commit(); }
+    });
     S.mounted = true; renderAll(); syncSnapBox();
   }
   function tryMount() {

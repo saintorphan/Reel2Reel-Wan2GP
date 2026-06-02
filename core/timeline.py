@@ -95,7 +95,7 @@ class Transition:
 # --------------------------------------------------------------------------- #
 
 class Timeline:
-    def __init__(self, name: str = "Cut 1", fps: int = 24, width: int = 1280,
+    def __init__(self, name: str = "Cut 1", fps: int = 30, width: int = 1280,
                  height: int = 720, sample_rate: int = 48000,
                  tracks: Optional[list] = None, transitions: Optional[list] = None,
                  ui: Optional[dict] = None):
@@ -436,7 +436,7 @@ class Timeline:
                     "label": c.label, "gain_db": c.gain_db, "fade_in": c.fade_in,
                     "fade_out": c.fade_out, "opacity": c.opacity, "mute": c.mute,
                     "has_audio": c.has_audio, "kind": t.kind, "thumb": c.thumb,
-                    "thumb_url": None,
+                    "thumb_url": None, "src_fps": c.src_fps,
                 })
         return {
             "name": self.name, "fps": self.fps, "width": self.width,

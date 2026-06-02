@@ -67,9 +67,11 @@ def test_edit_json_roundtrip():
     tl = _tl()
     edit = tl.to_edit_json()
     assert len(edit["clips"]) == 3 and len(edit["tracks"]) == 2
+    assert "src_fps" in edit["clips"][0]           # exposed for JS "match highest fps"
     tl2 = timeline.Timeline.from_edit_json(edit)
     assert len(tl2.tracks) == 2, ("no duplicate tracks", len(tl2.tracks))
     assert sum(len(t.clips) for t in tl2.tracks) == 3
+    assert tl2.fps == tl.fps == 24                  # fps survives the JS round-trip
     assert abs(tl2.total_duration() - tl.total_duration()) < 1e-6
     print("✓ flat edit-json round-trip")
 

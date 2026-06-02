@@ -29,6 +29,17 @@ video/audio tracks, trim and split, then **export a final cut** with ffmpeg.
   and a **per-project** bin, alongside the outputs browser. Drag bin clips onto
   the timeline.
 
+### Frame rate & resolution
+
+The timeline has one **sequence frame rate** + canvas size; every clip conforms to
+it on export — a 16 fps Wan clip and a 30 fps LTX clip both render at the project
+rate (durations preserved, frames duplicated/decimated to match; resolution scaled
++ letterboxed). The **first clip** added to an empty timeline **adopts** its fps +
+resolution (snapped to a common rate); after that it's the locked timebase. Change
+it any time with the timeline's **FPS** / **Size** fields, or **Match highest fps**
+to set the rate to the fastest source clip (best motion when mixing models).
+Default 30 fps.
+
 ### Right-click menu (shared "saintorphan" engine)
 
 Reel2Reel embeds the shared `window.SaintorphanMenu` engine and `announce()`s
