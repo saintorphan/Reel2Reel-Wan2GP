@@ -108,7 +108,7 @@
     S.lanes.innerHTML = "";
     (S.edit.tracks || []).forEach(function (t) {
       var collapsed = (t.height === 1);
-      var h = collapsed ? 16 : (t.height > 1 ? t.height : 52);
+      var h = collapsed ? 16 : (t.height > 1 ? t.height : 76);
       var row = document.createElement("div");
       row.className = "r2r-track r2r-" + (t.kind || "Video").toLowerCase();
       row.style.height = h + "px";
@@ -323,6 +323,8 @@
     el.setAttribute("aria-label", (c.label || c.id) + " clip on " + (t.name || t.id));
     el.style.transform = "translateX(" + sec2px(c.start) + "px)";
     el.style.width = Math.max(8, sec2px(c.dur)) + "px";
+    var lh = (t.height > 1 ? t.height : 76);            // fill the (taller) lane
+    el.style.height = Math.max(20, lh - 10) + "px";
     if (c.thumb_url) {
       el.style.backgroundImage = "url('" + c.thumb_url + "')";
       if ((t.kind || "Video") === "Video" && c.type !== "text") {   // filmstrip tiles
@@ -360,6 +362,7 @@
         m.className = "r2r-trans";
         m.style.transform = "translateX(" + sec2px(x.position) + "px)";
         m.style.width = Math.max(6, sec2px(x.duration)) + "px";
+        m.style.height = Math.max(20, (t.height > 1 ? t.height : 76) - 10) + "px";
         m.title = "dissolve " + x.duration + "s";
         lane.appendChild(m);
       });
@@ -909,6 +912,18 @@
     });
     placeMenu(menu, ev);
   }
+  // right-click the empty canvas / track-head area → add a track (replaces toolbar buttons)
+  function openAddTrackMenu(ev) {
+    ev.preventDefault(); closeTrackMenu();
+    var menu = document.createElement("div");
+    menu.className = "r2r-trk-menu"; menu.id = "r2r-trk-menu";
+    [["＋ Video track", "r2r-addv"], ["＋ Audio track", "r2r-adda"]].forEach(function (it) {
+      var b = document.createElement("button"); b.textContent = it[0];
+      b.addEventListener("click", function () { closeTrackMenu(); clickGr(it[1]); });
+      menu.appendChild(b);
+    });
+    placeMenu(menu, ev);
+  }
   function syncSnapBox() {
     var b = S.root && S.root.querySelector('[data-act="snap"]');
     if (b) b.classList.toggle("active", S.snap);
@@ -995,9 +1010,7 @@
       '    <button class="r2r-btn" data-gr="r2r-dup" title="Duplicate clip">⧉</button>' +
       '  </div>' +
       '  <div class="r2r-sep"></div>' +
-      '  <div class="r2r-grp">' +                            // insert
-      '    <button class="r2r-btn" data-gr="r2r-addv" title="Add video track">+Video</button>' +
-      '    <button class="r2r-btn" data-gr="r2r-adda" title="Add audio track">+Audio</button>' +
+      '  <div class="r2r-grp">' +                            // insert (add tracks: right-click the track-head area)
       '    <button class="r2r-btn" data-gr="r2r-title" title="Add title clip">🆃</button>' +
       '    <button class="r2r-btn" data-gr="r2r-marker" title="Add marker at playhead">🚩</button>' +
       '  </div>' +
@@ -1125,6 +1138,11 @@
       if (cl) { e.stopImmediatePropagation(); e.preventDefault(); openClipMenu(e, cl); return; }
       var mk = e.target.closest && e.target.closest(".r2r-marker");
       if (mk) { e.stopImmediatePropagation(); e.preventDefault(); openMarkerMenu(e, mk); return; }
+      // empty canvas / track-head area (not a clip or an existing head) → add-track menu
+      var sc = e.target.closest && e.target.closest(".r2r-scroll");
+      if (sc && !e.target.closest(".r2r-clip") && !e.target.closest(".r2r-head")) {
+        e.stopImmediatePropagation(); e.preventDefault(); openAddTrackMenu(e); return;
+      }
     }, true);
   }
 

@@ -172,6 +172,88 @@ class Reel2Reel(WAN2GPPlugin):
         self._clipboard: dict | None = None
         self._probe_warned = False         # one-time 'ffprobe missing' notice
 
+    def _relax_file_access(self):
+        """Additively let Gradio accept event-input files that live under Reel2Reel's
+        own dirs (renders / cache / uploads / LUTs / outputs). The sibling plugins
+        monkeypatch gradio's check_all_files_in_cache against THEIR own allow-list, so
+        our files would otherwise be rejected with 'File ... is not accessible'. We
+        wrap whatever check is in place: on a rejection we allow our files and re-raise
+        for anything foreign. Purely additive (never makes access stricter), load-order
+        independent, and fully guarded — never breaks the app."""
+        try:
+            import os
+            import tempfile
+            import gradio.processing_utils as _pu
+            import gradio_client.utils as _cu
+        except Exception:
+            return
+        if getattr(_pu, "_reel2reel_cache_patch", False):
+            return
+        prev = getattr(_pu, "check_all_files_in_cache", None)
+        if not callable(prev):
+            return
+
+        def _allow_dirs():
+            cand = []
+            try:
+                from gradio.context import Context
+                cand.append(getattr(Context.root_block, "GRADIO_CACHE", None))
+            except Exception:
+                pass
+            try:
+                from gradio.utils import get_upload_folder
+                cand.append(get_upload_folder())
+            except Exception:
+                pass
+            cand += [os.environ.get("GRADIO_TEMP_DIR"),
+                     os.path.join(tempfile.gettempdir(), "gradio"),
+                     os.path.join(os.getcwd(), "outputs")]
+            for fn in (paths.lab_root, paths.renders_dir, paths.cache_dir,
+                       paths.uploads_dir, paths.luts_dir, paths.wan2gp_outputs_dir):
+                try:
+                    cand.append(fn())
+                except Exception:
+                    pass
+            out = []
+            for p in cand:
+                try:
+                    if p:
+                        out.append(os.path.realpath(str(p)))
+                except Exception:
+                    pass
+            return out
+
+        def _under(p, bases):
+            try:
+                rp = os.path.realpath(p)
+            except Exception:
+                return False
+            for b in bases:
+                try:
+                    if os.path.commonpath([rp, b]) == b:
+                        return True
+                except (ValueError, OSError):
+                    continue
+            return False
+
+        def _lenient(data):
+            try:
+                prev(data)
+            except (ValueError, gr.Error) as e:
+                bases = _allow_dirs()
+
+                def _ok(d):
+                    p = d.get("path", "") if isinstance(d, dict) else ""
+                    if not p or _cu.is_http_url_like(p):
+                        return
+                    if os.path.exists(p) and _under(p, bases):
+                        return
+                    raise e
+                _cu.traverse(data, _ok, _cu.is_file_obj)
+
+        _pu.check_all_files_in_cache = _lenient
+        _pu._reel2reel_cache_patch = True
+
     # -- lifecycle ----------------------------------------------------------
     def setup_ui(self):
         try:
@@ -190,6 +272,7 @@ class Reel2Reel(WAN2GPPlugin):
                 paths.uploads_dir(), paths.luts_dir(), paths.wan2gp_outputs_dir()])
         except Exception:
             traceback.print_exc()
+        self._relax_file_access()
 
         self.request_component("state")
         self.request_component("main_tabs")
